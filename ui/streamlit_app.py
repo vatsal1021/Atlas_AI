@@ -11,6 +11,7 @@ import streamlit as st
 from app.config import configure_logging, get_settings
 from graph.graph import compile_graph
 from graph.planner_loop import create_initial_state
+from app.tracing import RuntimeTracer
 
 from ui.components.chat import render_chat
 from ui.components.plan_view import render_plan_view
@@ -73,6 +74,11 @@ if should_run_graph:
     with col_chat:
         status_container = st.status("Agent is planning...", expanded=True)
         
+        # Initialize Tracer for this run
+        tracer = RuntimeTracer(run_id=st.session_state.thread_id)
+        config["callbacks"] = [tracer]
+        tracer.log(f"User Request: {user_request}" if "user_request" in locals() else "Resuming from interrupt")
+        
         # Run or resume the graph
         try:
             for event in st.session_state.graph.stream(initial_state, config=config):
@@ -92,12 +98,26 @@ if should_run_graph:
         # Check if we hit an interrupt
         if current_state and current_state.next:
             status_container.update(label="Paused for Approval!", state="error", expanded=True)
-            st.session_state.messages.append({"role": "assistant", "content": "I need your approval before proceeding with bookings."})
+            
+            # Extract dynamic message if available
+            msg = "I need your approval before proceeding."
+            if current_state.tasks:
+                for task in current_state.tasks:
+                    if task.interrupts:
+                        msg = task.interrupts[0].value.get("message", msg)
+                        break
+                        
+            st.session_state.messages.append({"role": "assistant", "content": msg})
+            if "tracer" in locals():
+                tracer.log(f"\\n[EVENT: SYSTEM] {msg}")
         else:
             status_container.update(label="Execution Complete!", state="complete", expanded=False)
             # Only add completion message if not already done
             if not any(m["content"] == "I've finished drafting your plan. Please review the details!" for m in st.session_state.messages):
-                st.session_state.messages.append({"role": "assistant", "content": "I've finished drafting your plan. Please review the details!"})
+                msg = "I've finished drafting your plan. Please review the details!"
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                if "tracer" in locals():
+                    tracer.log(f"\\n[EVENT: SYSTEM] {msg}")
                 
         st.rerun()
 

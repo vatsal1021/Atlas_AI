@@ -39,7 +39,8 @@ def render_approval_card(state: dict, config: dict = None, graph = None):
             st.info("No pending approvals.")
         return
         
-    st.warning("⚠️ The agent has paused execution. It wants to perform irreversible actions.")
+    dynamic_msg = interrupt_data.get("message", "The agent has paused execution. It wants to perform actions requiring your approval.") if interrupt_data else "The agent has paused execution."
+    st.warning(f"⚠️ {dynamic_msg}")
     
     actions = interrupt_data.get("actions", []) if interrupt_data else []
     if not actions:
