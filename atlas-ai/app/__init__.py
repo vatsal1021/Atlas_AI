@@ -1,0 +1,1 @@
+"""AtlasAI application package."""

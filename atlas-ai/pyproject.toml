@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "atlas-ai"
+version = "0.1.0"
+description = "Autonomous goal-driven travel planning agent powered by LangGraph"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[project.scripts]
+atlas-ai = "app.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

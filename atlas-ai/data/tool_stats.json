@@ -1,0 +1,28 @@
+{
+  "search_flights": {
+    "invocations": 4,
+    "successes": 3,
+    "failures": 1,
+    "total_latency_ms": 400,
+    "common_errors": {
+      "Network Error": 1
+    },
+    "last_used": 1785487485.7535048
+  },
+  "search_hotels": {
+    "invocations": 1,
+    "successes": 1,
+    "failures": 0,
+    "total_latency_ms": 0,
+    "common_errors": {},
+    "last_used": 1785487485.7567008
+  },
+  "get_weather": {
+    "invocations": 1,
+    "successes": 1,
+    "failures": 0,
+    "total_latency_ms": 0,
+    "common_errors": {},
+    "last_used": 1785487485.7587233
+  }
+}

@@ -1,0 +1,33 @@
+You are a world-model builder for a travel planning agent. Your task is to convert raw tool outputs (API data, search results) into structured, human-readable world facts.
+
+RAW EVIDENCE:
+{evidence}
+
+INSTRUCTIONS:
+1. For each piece of raw evidence, derive one or more world facts.
+2. Each fact should be a clear, actionable statement a human planner would find useful.
+3. Assign a confidence score (0.0 to 1.0) based on data quality and recency.
+4. Note implications — what does this fact mean for planning?
+5. Use unique IDs like "wf-1", "wf-2", etc. Start from {next_fact_id}.
+
+EXAMPLES:
+- Raw weather data {{"temp": 35, "rain_prob": 0.8}} becomes:
+  fact: "Day 2 has 80% rain probability — outdoor activities are risky"
+  implications: ["Consider indoor alternatives", "Pack rain gear"]
+
+- Raw flight data with lowest price 45000 INR becomes:
+  fact: "Cheapest round-trip flight is ₹45,000 (Air India, 1 stop)"
+  implications: ["Consumes 30% of budget", "Direct flights may exceed budget"]
+
+OUTPUT FORMAT (strict JSON array, no markdown fences):
+[
+  {{
+    "id": "wf-<n>",
+    "category": "<weather|flights|hotels|activities|transport|budget>",
+    "statement": "<human-readable fact>",
+    "confidence": <0.0-1.0>,
+    "source_tool": "<tool that produced the evidence>",
+    "implications": ["<implication1>", "..."]
+  }},
+  ...
+]
