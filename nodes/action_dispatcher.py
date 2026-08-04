@@ -1,7 +1,9 @@
 """Action Dispatcher node.
 
 Executes approved booking, payment, and reservation actions.
-Only runs if approval_status == "approved".
+Only runs if approval_status == "approved" or "not_needed".
+Results are validated against BookingConfirmation / ReservationConfirmation
+/ PaymentReceipt schemas from schemas.approval_schema.
 """
 
 from __future__ import annotations
@@ -10,13 +12,15 @@ import logging
 from typing import Any
 
 from graph.state import TripState
+from schemas.approval_schema import ApprovalStatus
 from tools.booking import book_flight, book_hotel
 from tools.reservation import make_reservation
 from tools.payment import process_payment
+from app.tracing import get_tracker
 
 logger = logging.getLogger(__name__)
 
-# Tool function registry for booking/payment actions
+# Tool function registry for booking / payment actions
 _ACTION_FUNCTIONS: dict[str, Any] = {
     "book_flight": book_flight,
     "book_hotel": book_hotel,
@@ -26,14 +30,10 @@ _ACTION_FUNCTIONS: dict[str, Any] = {
 
 
 def action_dispatcher(state: TripState) -> dict[str, Any]:
-    """Execute approved booking/payment actions.
-
-    Only processes if approval_status is 'approved' or 'not_needed'.
-    Collects results and errors.
-    """
+    """Execute approved booking / payment actions."""
     approval_status = state.get("approval_status", "")
 
-    if approval_status not in ("approved", "not_needed"):
+    if approval_status not in (ApprovalStatus.APPROVED, ApprovalStatus.NOT_NEEDED):
         logger.warning(
             "action_dispatcher: Skipping — approval_status=%s", approval_status
         )
@@ -46,8 +46,9 @@ def action_dispatcher(state: TripState) -> dict[str, Any]:
     booking_results = list(state.get("booking_results", []))
     payment_results = list(state.get("payment_results", []))
     errors = list(state.get("errors", []))
+    tracker = get_tracker()
 
-    # Filter to only booking/payment actions
+    # Filter to only booking / payment actions
     booking_actions = [
         call for call in pending
         if call.get("tool", "") in _ACTION_FUNCTIONS
@@ -61,17 +62,36 @@ def action_dispatcher(state: TripState) -> dict[str, Any]:
 
         func = _ACTION_FUNCTIONS.get(tool_name)
         if func is None:
-            errors.append({"tool": tool_name, "error": f"Unknown action: {tool_name}"})
+            error_msg = f"Unknown action: {tool_name}"
+            errors.append({"tool": tool_name, "error": error_msg})
+            if tracker:
+                tracker.track_tool_call(
+                    tool_name=tool_name,
+                    input_params=params,
+                    output=None,
+                    status="Failed",
+                    error=error_msg,
+                    node_name="action_dispatcher",
+                )
             continue
 
         try:
             result = func(**params)
-            logger.info("action_dispatcher: %s succeeded.", tool_name)
+            logger.info("action_dispatcher: %s succeeded — id=%s", tool_name, result.get("booking_id") or result.get("transaction_id") or result.get("reservation_id", ""))
 
             if tool_name == "process_payment":
                 payment_results.append(result)
             else:
                 booking_results.append(result)
+
+            if tracker:
+                tracker.track_tool_call(
+                    tool_name=tool_name,
+                    input_params=params,
+                    output=result,
+                    status="Success",
+                    node_name="action_dispatcher",
+                )
 
         except Exception as exc:
             error_msg = f"Action {tool_name} failed: {exc!s}"
@@ -81,8 +101,17 @@ def action_dispatcher(state: TripState) -> dict[str, Any]:
                 "error": error_msg,
                 "params": params,
             })
+            if tracker:
+                tracker.track_tool_call(
+                    tool_name=tool_name,
+                    input_params=params,
+                    output=None,
+                    status="Failed",
+                    error=error_msg,
+                    node_name="action_dispatcher",
+                )
 
-    # Remove executed booking actions from pending
+    # Remove executed booking actions from pending so they aren't re-dispatched
     remaining = [
         call for call in pending
         if call.get("tool", "") not in _ACTION_FUNCTIONS

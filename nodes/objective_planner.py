@@ -7,16 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "planner.txt"
 
 
 def objective_planner(state: TripState) -> dict:
@@ -41,8 +39,8 @@ def objective_planner(state: TripState) -> dict:
         iteration, len(sub_goals), len(world_facts),
     )
 
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-    prompt_text = prompt_template.format(
+    system_prompt, user_template = load_prompt("planner")
+    user_content = user_template.format(
         parsed_goal=json.dumps(parsed_goal, indent=2),
         sub_goals=json.dumps(sub_goals, indent=2),
         world_facts=json.dumps(world_facts, indent=2),
@@ -53,8 +51,8 @@ def objective_planner(state: TripState) -> dict:
 
     llm = get_llm()
     messages = [
-        SystemMessage(content="You are the planning brain of an autonomous travel agent."),
-        HumanMessage(content=prompt_text),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)

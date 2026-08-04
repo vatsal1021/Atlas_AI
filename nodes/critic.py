@@ -3,58 +3,53 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from graph.state import TripState
 from services.llm import get_llm
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "critic.txt"
+from services.prompt_loader import load_prompt
 
 
 def critic(state: TripState) -> dict[str, Any]:
     """
     Independent critic evaluating the plan. If major flaws are found, signals to revise.
     """
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-    
-    # Format state for injection
+    system_prompt, user_template = load_prompt("critic")
+
     parsed_goal = state.get("parsed_goal", {})
     budget_analysis = json.dumps({
         "budget": parsed_goal.get("budget"),
-        "currency": parsed_goal.get("currency")
+        "currency": parsed_goal.get("currency"),
     }, indent=2)
-    world_facts = json.dumps(state.get("world_facts", []), indent=2)
-    full_plan = json.dumps(state.get("sub_goals", []), indent=2)
 
-    prompt = prompt_template.format(
+    user_content = user_template.format(
         budget_analysis=budget_analysis,
-        world_facts=world_facts,
-        full_plan=full_plan
+        world_facts=json.dumps(state.get("world_facts", []), indent=2),
+        full_plan=json.dumps(state.get("sub_goals", []), indent=2),
     )
 
-    llm = get_llm(json_mode=True)
+    llm = get_llm()
     messages = [
-        SystemMessage(content=prompt),
-        HumanMessage(content="Critique the proposed travel plan strictly.")
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)
-    
+
     try:
         content = str(response.content)
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         result = json.loads(content)
-    except Exception as e:
+    except Exception:
         result = {"issues": [], "overall_rating": "good", "should_revise": False}
-        
+
     issues = result.get("issues", [])
     should_revise = result.get("should_revise", False)
-    
-    # If the critic demands a revision, we reset planning_complete to False
+
+    # If the critic demands a revision, reset planning_complete
     planning_complete = state.get("planning_complete", True)
     if should_revise:
         planning_complete = False
@@ -63,5 +58,5 @@ def critic(state: TripState) -> dict[str, Any]:
         "critic_feedback": issues,
         "critic_should_revise": should_revise,
         "planning_complete": planning_complete,
-        "revision_count": state.get("revision_count", 0) + 1
+        "revision_count": state.get("revision_count", 0) + 1,
     }

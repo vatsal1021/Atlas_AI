@@ -7,16 +7,14 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "goal_decomposition.txt"
 
 
 def goal_decomposition(state: TripState) -> dict:
@@ -30,15 +28,15 @@ def goal_decomposition(state: TripState) -> dict:
     parsed_goal = state.get("parsed_goal", {})
     logger.info("goal_decomposition  destination=%s", parsed_goal.get("destination", "?"))
 
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-    prompt_text = prompt_template.format(
+    system_prompt, user_template = load_prompt("goal_decomposition")
+    user_content = user_template.format(
         parsed_goal=json.dumps(parsed_goal, indent=2),
     )
 
     llm = get_llm()
     messages = [
-        SystemMessage(content="You are a travel planning strategist."),
-        HumanMessage(content=prompt_text),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)

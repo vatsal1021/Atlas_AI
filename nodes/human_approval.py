@@ -1,9 +1,11 @@
 """Human Approval node.
 
 Checks if the current plan involves irreversible actions (booking, payment,
-reservation) using an LLM to dynamically determine if approval is needed.
-If so, uses LangGraph's interrupt() mechanism to pause the
-graph and wait for user approval via the Streamlit UI.
+reservation) using an LLM to dynamically determine whether approval is needed.
+If so, uses LangGraph's interrupt() mechanism to pause the graph and wait for
+user approval via the Streamlit UI.
+
+Schemas: schemas.approval_schema.ApprovalRequest / ApprovalResponse
 """
 
 from __future__ import annotations
@@ -15,109 +17,151 @@ from typing import Any
 from langchain_core.messages import SystemMessage, HumanMessage
 from services.llm import get_llm
 from graph.state import TripState
+from schemas.approval_schema import (
+    ApprovalAction,
+    ApprovalRequest,
+    ApprovalResponse,
+    ApprovalStatus,
+    ActionType,
+)
 
 logger = logging.getLogger(__name__)
 
+# Tools that always require approval
+_IRREVERSIBLE_TOOLS: set[str] = {
+    "book_flight",
+    "book_hotel",
+    "make_reservation",
+    "process_payment",
+}
+
+# Map tool name → ActionType
+_TOOL_ACTION_TYPE: dict[str, ActionType] = {
+    "book_flight": ActionType.BOOK_FLIGHT,
+    "book_hotel": ActionType.BOOK_HOTEL,
+    "make_reservation": ActionType.MAKE_RESERVATION,
+    "process_payment": ActionType.PROCESS_PAYMENT,
+}
+
+
+def _build_approval_actions(pending: list[dict]) -> list[ApprovalAction]:
+    """Convert raw pending tool call dicts to validated ApprovalAction models."""
+    actions = []
+    for call in pending:
+        tool = call.get("tool", "")
+        if tool not in _IRREVERSIBLE_TOOLS:
+            continue
+        actions.append(
+            ApprovalAction(
+                tool=tool,
+                action_type=_TOOL_ACTION_TYPE.get(tool, ActionType.OTHER),
+                parameters=call.get("parameters", {}),
+                reasoning=call.get("reasoning", ""),
+                sub_goal_id=call.get("sub_goal_id", ""),
+                estimated_cost=call.get("estimated_cost", 0.0),
+                currency=call.get("currency", "INR"),
+                is_reversible=False,
+            )
+        )
+    return actions
+
 
 def human_approval(state: TripState) -> dict[str, Any]:
-    """Check if any pending actions require human approval dynamically via LLM.
-
-    If irreversible actions are detected, pauses the graph via interrupt()
-    so the Streamlit UI can collect the user's decision.
-    """
+    """Check if any pending actions require human approval, then interrupt if so."""
     pending = state.get("pending_tool_calls", [])
-    
+
     if not pending:
         logger.info("human_approval: No pending actions, skipping.")
         return {
             "approval_required": False,
-            "approval_status": "not_needed",
+            "approval_status": ApprovalStatus.NOT_NEEDED,
         }
 
-    llm = get_llm()
-    sys_msg = SystemMessage(content=(
-        "You are a helpful travel assistant. You are about to execute a set of actions (tools). "
-        "Review these actions and determine if human approval is required. "
-        "Irreversible actions like bookings, reservations, or payments ALWAYS require approval. "
-        "Return a JSON object exactly like this: "
-        '{"requires_approval": true/false, "message": "A friendly message asking the user for permission, if needed"}. '
-        "If approval is needed, the message should briefly summarize what you are doing "
-        "(e.g., 'I have found the following itinerary... Would you like me to book it? (Yes/No)'). "
-        "If no approval is needed, set requires_approval to false and leave the message empty."
-    ))
-    
-    human_msg = HumanMessage(content=f"Pending actions: {json.dumps(pending, indent=2)}\n\nCurrent Plan:\n{json.dumps(state.get('parsed_goal', {}))}")
-    
-    logger.info("human_approval: Consulting LLM for approval requirement...")
-    try:
-        response = llm.invoke([sys_msg, human_msg])
-        content = response.content.strip()
-        if content.startswith("```json"):
-            content = content[7:-3].strip()
-        elif content.startswith("```"):
-            content = content[3:-3].strip()
-            
-        result = json.loads(content)
-        requires_approval = result.get("requires_approval", False)
-        message = result.get("message", "The following actions require your approval.")
-        
-    except Exception as e:
-        logger.error(f"Failed to parse LLM approval decision: {e}")
-        # Fallback to simple keyword check if LLM fails
-        irreversible = [
-            c for c in pending 
-            if "book" in c.get("tool", "").lower() or "payment" in c.get("tool", "").lower() or "reserv" in c.get("tool", "").lower()
-        ]
-        requires_approval = len(irreversible) > 0
-        message = "The following actions require your approval before proceeding."
+    irreversible_actions = _build_approval_actions(pending)
 
-    if not requires_approval:
-        logger.info("human_approval: LLM decided no approval is needed.")
+    if not irreversible_actions:
+        logger.info("human_approval: No irreversible actions found, skipping.")
         return {
             "approval_required": False,
-            "approval_status": "not_needed",
+            "approval_status": ApprovalStatus.NOT_NEEDED,
         }
 
-    logger.info("human_approval: Approval required. Message: %s", message)
+    # Ask the LLM to compose a friendly approval message
+    llm = get_llm()
+    actions_summary = json.dumps(
+        [a.model_dump(include={"tool", "parameters", "reasoning"}) for a in irreversible_actions],
+        indent=2,
+    )
+    sys_msg = SystemMessage(content=(
+        "You are a travel assistant. The following irreversible actions are about to be executed. "
+        "Write a short, friendly confirmation message for the user summarising what will happen "
+        "and asking for approval. Be concise (2-3 sentences)."
+    ))
+    human_msg = HumanMessage(content=f"Actions:\n{actions_summary}")
 
-    # Use LangGraph interrupt to pause and wait for user decision.
-    # The interrupt value is sent to the UI as context.
+    try:
+        response = llm.invoke([sys_msg, human_msg])
+        message = response.content.strip()
+    except Exception as exc:
+        logger.error("human_approval: LLM failed to compose message: %s", exc)
+        message = (
+            "The agent is ready to execute the following irreversible actions. "
+            "Please review and approve or reject."
+        )
+
+    # Build a fully-typed ApprovalRequest to pass to the UI
+    total_cost = sum(a.estimated_cost for a in irreversible_actions)
+    approval_request = ApprovalRequest(
+        type="approval_request",
+        message=message,
+        actions=irreversible_actions,
+        total_estimated_cost=total_cost,
+        currency=state.get("parsed_goal", {}).get("currency", "INR"),
+    )
+
+    logger.info(
+        "human_approval: %d irreversible action(s) pending. Interrupting graph.",
+        len(irreversible_actions),
+    )
+
+    # Interrupt the graph — LangGraph pauses here until the UI resumes
     try:
         from langgraph.types import interrupt
 
-        user_decision = interrupt({
-            "type": "approval_request",
-            "actions": pending,
-            "message": message,
-        })
+        raw_decision = interrupt(approval_request.model_dump())
 
-        # user_decision is injected by the UI when it resumes the graph
-        approved = user_decision.get("approved", False)
-        reason = user_decision.get("reason", "")
+        # Validate the resume payload
+        try:
+            decision = ApprovalResponse.model_validate(raw_decision)
+        except Exception:
+            # If the UI sends a plain dict without Pydantic validation
+            decision = ApprovalResponse(
+                approved=bool(raw_decision.get("approved", False)),
+                reason=str(raw_decision.get("reason", "")),
+            )
 
-        if approved:
-            logger.info("human_approval: User APPROVED the actions.")
+        if decision.approved:
+            logger.info("human_approval: User APPROVED.")
             return {
                 "approval_required": True,
-                "approval_status": "approved",
+                "approval_status": ApprovalStatus.APPROVED,
                 "approval_reason": "",
             }
         else:
-            logger.info("human_approval: User REJECTED. Reason: %s", reason)
+            logger.info("human_approval: User REJECTED. Reason: %s", decision.reason)
             return {
                 "approval_required": True,
-                "approval_status": "rejected",
-                "approval_reason": reason,
+                "approval_status": ApprovalStatus.REJECTED,
+                "approval_reason": decision.reason,
             }
 
     except ImportError:
-        # Fallback if interrupt() is not available in this LangGraph version
         logger.warning(
             "human_approval: langgraph.types.interrupt not available. "
             "Auto-approving for development."
         )
         return {
             "approval_required": True,
-            "approval_status": "approved",
+            "approval_status": ApprovalStatus.APPROVED,
             "approval_reason": "",
         }

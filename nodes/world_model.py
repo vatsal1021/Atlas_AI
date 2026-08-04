@@ -8,16 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "world_model.txt"
 
 
 def world_model(state: TripState) -> dict:
@@ -43,16 +41,16 @@ def world_model(state: TripState) -> dict:
         list(evidence.keys()), len(existing_facts),
     )
 
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-    prompt_text = prompt_template.format(
+    system_prompt, user_template = load_prompt("world_model")
+    user_content = user_template.format(
         evidence=json.dumps(evidence, indent=2),
         next_fact_id=next_id,
     )
 
     llm = get_llm()
     messages = [
-        SystemMessage(content="You are a world-model builder for a travel planning agent."),
-        HumanMessage(content=prompt_text),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)

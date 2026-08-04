@@ -9,17 +9,15 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "meta_reasoner.txt"
 
 # Maps recovery_strategy → target node name
 RECOVERY_ROUTES: dict[str, str] = {
@@ -33,8 +31,6 @@ RECOVERY_ROUTES: dict[str, str] = {
 
 def meta_reasoner(state: TripState) -> dict[str, Any]:
     """Diagnose failures and produce a recovery strategy."""
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-
     errors = state.get("errors", [])
     failure_history = list(state.get("failure_history", []))
     recovery_attempts = state.get("recovery_attempts", 0)
@@ -84,7 +80,8 @@ def meta_reasoner(state: TripState) -> dict[str, Any]:
         }
 
     # Call LLM for diagnosis
-    prompt = prompt_template.format(
+    system_prompt, user_template = load_prompt("meta_reasoner")
+    user_content = user_template.format(
         failed_component=failed_component,
         error_details=error_details,
         previous_attempts=json.dumps(failure_history, indent=2),
@@ -97,10 +94,10 @@ def meta_reasoner(state: TripState) -> dict[str, Any]:
         }, indent=2),
     )
 
-    llm = get_llm(json_mode=True)
+    llm = get_llm()
     messages = [
-        SystemMessage(content=prompt),
-        HumanMessage(content="Diagnose the failure and recommend a recovery strategy."),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)

@@ -8,17 +8,15 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 from tools.memory import load_preferences
 
 logger = logging.getLogger(__name__)
-
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "goal_understanding.txt"
 
 
 def goal_understanding(state: TripState) -> dict:
@@ -35,17 +33,17 @@ def goal_understanding(state: TripState) -> dict:
     # Load returning-user preferences
     memory_ctx = load_preferences("default")
 
-    # Build prompt
-    prompt_template = _PROMPT_PATH.read_text(encoding="utf-8")
-    prompt_text = prompt_template.format(
+    # Build prompt from YAML
+    system_prompt, user_template = load_prompt("goal_understanding")
+    user_content = user_template.format(
         user_input=user_input,
         memory_context=json.dumps(memory_ctx) if memory_ctx else "No prior preferences.",
     )
 
     llm = get_llm()
     messages = [
-        SystemMessage(content="You are a travel goal extraction assistant."),
-        HumanMessage(content=prompt_text),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ]
 
     response = llm.invoke(messages)
