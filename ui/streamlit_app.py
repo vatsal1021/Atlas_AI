@@ -11,7 +11,7 @@ import streamlit as st
 from app.config import configure_logging, get_settings
 from graph.graph import compile_graph
 from graph.planner_loop import create_initial_state
-from app.tracing import RuntimeTracer
+from app.tracing import start_execution_tracker
 
 from ui.components.chat import render_chat
 from ui.components.plan_view import render_plan_view
@@ -50,7 +50,6 @@ with col_chat:
     
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
-        # Clear old state for new request
         st.session_state.trip_state = None
         st.session_state.resume_command = None
         st.rerun()
@@ -74,21 +73,17 @@ if should_run_graph:
     with col_chat:
         status_container = st.status("Agent is planning...", expanded=True)
         
-        # Initialize Tracer for this run
-        tracer = RuntimeTracer(run_id=st.session_state.thread_id)
-        config["callbacks"] = [tracer]
-        tracer.log(f"User Request: {user_request}" if "user_request" in locals() else "Resuming from interrupt")
+        # Start execution tracker for this run
+        _user_req = user_request if "user_request" in locals() else "Resuming from interrupt"
+        tracker = start_execution_tracker(run_id=st.session_state.thread_id, user_input=_user_req)
         
-        # Run or resume the graph
         try:
             for event in st.session_state.graph.stream(initial_state, config=config):
                 for node_name, state_update in event.items():
                     status_container.write(f"Executed node: **`{node_name}`**")
-                    if isinstance(state_update, dict):
-                        # Merge state updates locally if needed, but get_state is safer
-                        pass
         except Exception as e:
             st.error(f"Graph execution error: {e}")
+            tracker.track_workflow_complete(success=False, error=str(e))
             
         # Update session state with the latest graph state
         current_state = st.session_state.graph.get_state(config)
@@ -98,8 +93,6 @@ if should_run_graph:
         # Check if we hit an interrupt
         if current_state and current_state.next:
             status_container.update(label="Paused for Approval!", state="error", expanded=True)
-            
-            # Extract dynamic message if available
             msg = "I need your approval before proceeding."
             if current_state.tasks:
                 for task in current_state.tasks:
@@ -108,16 +101,12 @@ if should_run_graph:
                         break
                         
             st.session_state.messages.append({"role": "assistant", "content": msg})
-            if "tracer" in locals():
-                tracer.log(f"\\n[EVENT: SYSTEM] {msg}")
         else:
             status_container.update(label="Execution Complete!", state="complete", expanded=False)
-            # Only add completion message if not already done
             if not any(m["content"] == "I've finished drafting your plan. Please review the details!" for m in st.session_state.messages):
                 msg = "I've finished drafting your plan. Please review the details!"
                 st.session_state.messages.append({"role": "assistant", "content": msg})
-                if "tracer" in locals():
-                    tracer.log(f"\\n[EVENT: SYSTEM] {msg}")
+            tracker.track_workflow_complete(success=True)
                 
         st.rerun()
 

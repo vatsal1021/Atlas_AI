@@ -1,8 +1,22 @@
 """Comprehensive Debugging & Observability System.
 
 Generates two separate files for every execution in the runtime/ directory:
-1. runtime_<run_id>.json — Full structured JSON event log (tools, state changes, errors, etc.)
-2. trace_<run_id>.log — Human-readable execution log focused on tool calls & workflow progression.
+  1. runtime_<run_id>.json  — Full structured JSON event log
+  2. trace_<run_id>.log     — Human-readable execution log
+
+Usage (from any node, tool, or service):
+
+    from app.tracing import get_tracker
+    tracker = get_tracker()           # None if no active run
+    if tracker:
+        tracker.track_tool_call(...)
+
+Usage (from app entry points):
+
+    from app.tracing import start_execution_tracker
+    tracker = start_execution_tracker(run_id="abc123", user_input="Plan a trip...")
+    ...
+    tracker.track_workflow_complete(success=True)
 """
 
 from __future__ import annotations
@@ -23,58 +37,102 @@ from langchain_core.messages import BaseMessage
 
 logger = logging.getLogger(__name__)
 
-# Context variable to hold active tracker for current thread/async context
-_current_tracker: ContextVar[Optional[ExecutionTracker]] = ContextVar(
+# Context variable holds the active tracker for the current thread / async task
+_current_tracker: ContextVar[Optional["ExecutionTracker"]] = ContextVar(
     "_current_tracker", default=None
 )
 
 
-def get_tracker() -> Optional[ExecutionTracker]:
-    """Get current active ExecutionTracker, if any."""
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def get_tracker() -> Optional["ExecutionTracker"]:
+    """Return the active ExecutionTracker, or None if none is set."""
     return _current_tracker.get()
 
 
-def set_tracker(tracker: Optional[ExecutionTracker]) -> None:
-    """Set active ExecutionTracker."""
+def set_tracker(tracker: Optional["ExecutionTracker"]) -> None:
+    """Register an ExecutionTracker as active for the current context."""
     _current_tracker.set(tracker)
 
 
-class ExecutionTracker:
-    """Manages dual-file observability for workflow runs.
+def start_execution_tracker(
+    run_id: Optional[str] = None,
+    user_input: Optional[str] = None,
+) -> "ExecutionTracker":
+    """Create, register, and return a new ExecutionTracker for this run."""
+    tracker = ExecutionTracker(run_id=run_id, user_input=user_input)
+    set_tracker(tracker)
+    return tracker
 
-    Files generated:
-      - runtime/runtime_<run_id>.json
-      - runtime/trace_<run_id>.log
+
+# ---------------------------------------------------------------------------
+# Core ExecutionTracker
+# ---------------------------------------------------------------------------
+
+class ExecutionTracker:
+    """Manages dual-file observability for one workflow run.
+
+    Files written to ``runtime/``:
+      - ``runtime_<run_id>.json``  — structured event log (JSON)
+      - ``trace_<run_id>.log``     — human-readable trace log (text)
+
+    Both files are written atomically on every event so they remain
+    readable even if the process crashes mid-run.
     """
 
-    def __init__(self, run_id: Optional[str] = None):
+    def __init__(
+        self,
+        run_id: Optional[str] = None,
+        user_input: Optional[str] = None,
+    ):
         self.run_id = run_id or uuid.uuid4().hex[:8]
+        self.user_input = user_input or ""
         self.base_dir = Path(__file__).resolve().parent.parent / "runtime"
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
         self.json_file = self.base_dir / f"runtime_{self.run_id}.json"
-        self.log_file = self.base_dir / f"trace_{self.run_id}.log"
+        self.log_file  = self.base_dir / f"trace_{self.run_id}.log"
 
         self.events: List[Dict[str, Any]] = []
-        self.start_time = time.time()
-        self.status = "Started"
+        self.start_time: float = time.time()
+        self.status: str = "Running"
         self.current_node: Optional[str] = None
 
-        # Clean old log/json if re-using same ID
-        if self.json_file.exists():
-            self.json_file.unlink()
-        if self.log_file.exists():
-            self.log_file.unlink()
+        # Wipe existing files (safe when re-using same run_id, e.g. in tests)
+        for f in (self.json_file, self.log_file):
+            if f.exists():
+                f.unlink()
 
-        # Initial event
+        # Trace header
+        started_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        divider = "═" * 60
+        self.log_trace(divider)
+        self.log_trace(f"  AtlasAI Execution Trace")
+        self.log_trace(f"  Run ID  : {self.run_id}")
+        self.log_trace(f"  Started : {started_str}")
+        if self.user_input:
+            self.log_trace(f"  Request : {self.user_input[:120]}")
+        self.log_trace(divider)
+        self.log_trace("")
+
+        # Seed the JSON with the init event
         self.record_event(
             event_type="Agent Initialization",
             component="Agent",
             component_name="AtlasAI",
             status="Started",
-            metadata={"run_id": self.run_id},
+            metadata={
+                "run_id": self.run_id,
+                "user_input": self.user_input,
+            },
         )
-        self.log_trace(f"[Workflow] Initialized (Run ID: {self.run_id})\n")
+        self.log_trace(f"[Workflow] Run {self.run_id} started\n")
+
+    # -----------------------------------------------------------------------
+    # Low-level event recorder
+    # -----------------------------------------------------------------------
 
     def record_event(
         self,
@@ -90,10 +148,10 @@ class ExecutionTracker:
         error_details: Optional[Any] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Record a structured runtime event and write to JSON."""
+        """Append a structured event, then flush both files to disk."""
         node = current_workflow_node or self.current_node
-        event = {
-            "event_id": f"evt_{len(self.events) + 1}",
+        event: Dict[str, Any] = {
+            "event_id": f"evt_{len(self.events) + 1:04d}",
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "event_type": event_type,
             "component": component,
@@ -112,23 +170,27 @@ class ExecutionTracker:
         return event
 
     def log_trace(self, text: str) -> None:
-        """Append line to trace log."""
+        """Append a line to the human-readable trace log."""
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(text + "\n")
 
+    # -----------------------------------------------------------------------
+    # High-level tracking helpers
+    # -----------------------------------------------------------------------
+
     def track_node_start(self, node_name: str, input_state: Dict[str, Any]) -> None:
-        """Record node execution start."""
+        """Log the beginning of a LangGraph node execution."""
         self.current_node = node_name
         self.record_event(
             event_type="Node Execution",
             component="Node",
             component_name=node_name,
-            current_workflow_node=node_name,
             status="Started",
-            input_payload={"state_keys": list(input_state.keys()) if isinstance(input_state, dict) else None},
+            input_payload={
+                "state_keys": list(input_state.keys()) if isinstance(input_state, dict) else None,
+            },
         )
-        pretty_name = "".join(x.title() for x in node_name.split("_"))
-        self.log_trace(f"[{pretty_name}] Started")
+        self.log_trace(f"[{_pretty(node_name)}] Started")
 
     def track_node_end(
         self,
@@ -138,16 +200,12 @@ class ExecutionTracker:
         status: str = "Success",
         error: Optional[Any] = None,
     ) -> None:
-        """Record node execution completion."""
-        pretty_name = "".join(x.title() for x in node_name.split("_"))
-
-        # Log planned tool selections if planner produced pending calls
-        if isinstance(state_update, dict) and "pending_tool_calls" in state_update:
-            pending = state_update["pending_tool_calls"]
-            for call in pending:
+        """Log the completion of a LangGraph node execution."""
+        # Surface any planned tool calls chosen by the planner
+        if isinstance(state_update, dict):
+            for call in state_update.get("pending_tool_calls", []):
                 tool = call.get("tool", "Unknown")
-                pretty_tool = "".join(x.title() for x in tool.split("_"))
-                self.log_trace(f"[{pretty_name}] Selected: {pretty_tool} Tool")
+                self.log_trace(f"[{_pretty(node_name)}] Selected: {_pretty(tool)} Tool")
 
         state_changes = {
             "update_keys": list(state_update.keys()) if isinstance(state_update, dict) else None,
@@ -158,15 +216,17 @@ class ExecutionTracker:
             event_type="Node Execution",
             component="Node",
             component_name=node_name,
-            current_workflow_node=node_name,
             status=status,
             output_response=state_update,
             state_changes=state_changes,
             error_details=error,
         )
 
-        if status != "Success":
-            self.log_trace(f"[{pretty_name}] Failed: {error}\n")
+        status_label = "✓ Success" if status == "Success" else f"✗ {status}"
+        if status == "Failed":
+            self.log_trace(f"[{_pretty(node_name)}] {status_label}: {error}\n")
+        else:
+            self.log_trace(f"[{_pretty(node_name)}] {status_label}\n")
 
     def track_tool_call(
         self,
@@ -177,10 +237,8 @@ class ExecutionTracker:
         error: Optional[Any] = None,
         node_name: Optional[str] = None,
     ) -> None:
-        """Record tool invocation."""
+        """Log a tool invocation with inputs, outputs, and status."""
         node = node_name or self.current_node
-        pretty_tool = "".join(x.title() for x in tool_name.split("_"))
-
         self.record_event(
             event_type="Tool Call",
             component="Tool",
@@ -190,19 +248,21 @@ class ExecutionTracker:
             input_payload=input_params,
             output_response=output,
             error_details=error,
+            metadata={"node": node},
         )
+        # Human-readable trace block
+        params_str = json.dumps(input_params, default=str)
+        if len(params_str) > 200:
+            params_str = params_str[:197] + "..."
+        output_summary = _summarize_tool_output(output) if status == "Success" else f"ERROR: {error}"
 
-        # Output summary calculation
-        output_summary = _summarize_tool_output(output)
-
-        self.log_trace(f"[Tool] {pretty_tool}")
-        self.log_trace(f"        Input  : {json.dumps(input_params, default=str)}")
-        self.log_trace(f"        Status : {status}")
-        self.log_trace(f"        Output : {output_summary}\n")
+        self.log_trace(f"[Tool] {_pretty(tool_name)}")
+        self.log_trace(f"       Input  : {params_str}")
+        self.log_trace(f"       Status : {status}")
+        self.log_trace(f"       Output : {output_summary}\n")
 
     def track_routing(self, from_node: str, to_node: str) -> None:
-        """Record routing decision."""
-        pretty_to = "".join(x.title() for x in to_node.split("_"))
+        """Log a conditional routing decision."""
         self.record_event(
             event_type="Conditional Routing",
             component="Router",
@@ -212,149 +272,257 @@ class ExecutionTracker:
             input_payload={"from": from_node},
             output_response={"to": to_node},
         )
-        self.log_trace(f"[Router] → {pretty_to} Node\n")
+        self.log_trace(f"[Router] → {_pretty(to_node)} Node\n")
 
     def track_memory_op(
-        self, op_type: str, category_or_key: str, payload: Any
+        self,
+        op_type: str,
+        category_or_key: str,
+        payload: Any,
     ) -> None:
-        """Record memory read/write operation."""
+        """Log a memory read or write operation."""
         self.record_event(
             event_type="Memory Operation",
             component="Memory",
             component_name=op_type,
             status="Success",
-            input_payload={"key": category_or_key, "data": payload},
+            input_payload={"key": category_or_key},
+            output_response=_serialize(payload),
         )
         self.log_trace(f"[Memory] {op_type}: {category_or_key}")
 
     def track_workflow_complete(
-        self, success: bool = True, error: Optional[Any] = None
+        self,
+        success: bool = True,
+        error: Optional[Any] = None,
     ) -> None:
-        """Record workflow completion."""
+        """Record final workflow status and flush both output files."""
+        elapsed = time.time() - self.start_time
         self.status = "Success" if success else "Failed"
+
         self.record_event(
             event_type="Workflow Completion",
             component="Agent",
             component_name="AtlasAI",
             status=self.status,
             error_details=error,
+            metadata={"elapsed_seconds": round(elapsed, 2)},
         )
+
+        # Trace footer
+        self.log_trace("")
+        divider = "═" * 60
+        self.log_trace(divider)
         if success:
-            self.log_trace("[Workflow] Completed Successfully")
+            self.log_trace(f"[Workflow] Completed Successfully  ({elapsed:.1f}s)")
         else:
-            self.log_trace(f"[Workflow] Failed: {error}")
+            self.log_trace(f"[Workflow] Failed  ({elapsed:.1f}s)")
+            if error:
+                self.log_trace(f"           Error: {error}")
+
+        # Summary counts
+        tool_events    = [e for e in self.events if e["event_type"] == "Tool Call"]
+        node_events    = [e for e in self.events if e["event_type"] == "Node Execution" and e["status"] == "Started"]
+        error_events   = [e for e in self.events if e.get("error_details")]
+        llm_events     = [e for e in self.events if e["event_type"] == "LLM Call" and e["status"] == "Success"]
+        mem_events     = [e for e in self.events if e["event_type"] == "Memory Operation"]
+
+        self.log_trace(f"")
+        self.log_trace(f"  Summary:")
+        self.log_trace(f"    Nodes executed  : {len(node_events)}")
+        self.log_trace(f"    Tool calls      : {len(tool_events)}")
+        self.log_trace(f"    LLM calls       : {len(llm_events)}")
+        self.log_trace(f"    Memory ops      : {len(mem_events)}")
+        self.log_trace(f"    Errors          : {len(error_events)}")
+        self.log_trace(divider)
+        self.log_trace(f"  Runtime JSON : runtime_{self.run_id}.json")
+        self.log_trace(f"  Trace Log    : trace_{self.run_id}.log")
+        self.log_trace(divider)
+
+        # Final JSON flush with summary
         self._flush_json()
 
+    # -----------------------------------------------------------------------
+    # Internal helpers
+    # -----------------------------------------------------------------------
+
     def _flush_json(self) -> None:
-        """Flush JSON data to disk."""
-        data = {
+        """Write the full event list and computed summary to disk."""
+        tool_calls = [
+            e["component_name"]
+            for e in self.events
+            if e["event_type"] == "Tool Call"
+        ]
+        nodes_executed = list(dict.fromkeys(  # ordered unique
+            e["component_name"]
+            for e in self.events
+            if e["event_type"] == "Node Execution" and e["status"] == "Started"
+        ))
+        errors = [
+            {
+                "event_id": e["event_id"],
+                "component": e["component_name"],
+                "error": e["error_details"],
+            }
+            for e in self.events
+            if e.get("error_details")
+        ]
+
+        data: Dict[str, Any] = {
             "run_id": self.run_id,
             "status": self.status,
-            "start_time": datetime.datetime.fromtimestamp(self.start_time, datetime.timezone.utc).isoformat(),
-            "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "total_events": len(self.events),
+            "user_input": self.user_input,
+            "start_time": datetime.datetime.fromtimestamp(
+                self.start_time, datetime.timezone.utc
+            ).isoformat(),
+            "last_updated": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
+            "output_files": {
+                "runtime_json": str(self.json_file),
+                "trace_log": str(self.log_file),
+            },
+            "summary": {
+                "total_events": len(self.events),
+                "nodes_executed": nodes_executed,
+                "tools_called": tool_calls,
+                "unique_tools": list(dict.fromkeys(tool_calls)),
+                "llm_calls": sum(
+                    1 for e in self.events
+                    if e["event_type"] == "LLM Call" and e["status"] == "Success"
+                ),
+                "memory_ops": sum(
+                    1 for e in self.events
+                    if e["event_type"] == "Memory Operation"
+                ),
+                "errors": errors,
+                "error_count": len(errors),
+            },
             "events": self.events,
         }
+
         with open(self.json_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
 
 
-def start_execution_tracker(run_id: Optional[str] = None) -> ExecutionTracker:
-    """Helper to start and register an ExecutionTracker."""
-    tracker = ExecutionTracker(run_id=run_id)
-    set_tracker(tracker)
-    return tracker
-
+# ---------------------------------------------------------------------------
+# LangChain callback — captures LLM calls automatically
+# ---------------------------------------------------------------------------
 
 class RuntimeTracer(BaseCallbackHandler):
-    """LangChain callback handler to stream LLM events into ExecutionTracker."""
+    """LangChain callback handler that forwards LLM events to ExecutionTracker."""
 
-    def __init__(self, run_id: Optional[str] = None, tracker: Optional[ExecutionTracker] = None):
+    def __init__(
+        self,
+        run_id: Optional[str] = None,
+        tracker: Optional[ExecutionTracker] = None,
+    ):
         super().__init__()
         self.tracker = tracker or get_tracker() or start_execution_tracker(run_id=run_id)
 
     def on_chat_model_start(
-        self, serialized: Dict[str, Any], messages: List[List[BaseMessage]], **kwargs: Any
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
+        **kwargs: Any,
     ) -> Any:
-        prompt_texts = []
-        for message_list in messages:
-            for msg in message_list:
-                prompt_texts.append(f"[{msg.type.upper()}]: {msg.content}")
+        prompts: List[str] = []
+        for msg_list in messages:
+            for msg in msg_list:
+                preview = str(msg.content)[:300]
+                prompts.append(f"[{msg.type.upper()}]: {preview}")
 
         self.tracker.record_event(
             event_type="LLM Call",
             component="Service",
             component_name=(serialized or {}).get("name", "ChatModel"),
+            current_workflow_node=self.tracker.current_node,
             status="Started",
-            input_payload={"prompts": prompt_texts},
+            input_payload={"prompts": prompts},
         )
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> Any:
-        outputs = []
+        outputs: List[str] = []
         for gen_list in response.generations:
             for gen in gen_list:
-                outputs.append(gen.text)
+                outputs.append(str(gen.text)[:300])
 
         self.tracker.record_event(
             event_type="LLM Call",
             component="Service",
             component_name="ChatModel",
+            current_workflow_node=self.tracker.current_node,
             status="Success",
             output_response={"outputs": outputs},
         )
 
     def on_llm_error(
-        self, error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
     ) -> Any:
         self.tracker.record_event(
             event_type="LLM Call",
             component="Service",
             component_name="ChatModel",
+            current_workflow_node=self.tracker.current_node,
             status="Failed",
             error_details=str(error),
         )
 
 
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+
 def _serialize(obj: Any) -> Any:
-    """Convert non-serializable objects to dict/str representation."""
+    """Recursively convert non-JSON-serialisable objects."""
     if obj is None or isinstance(obj, (int, float, str, bool)):
         return obj
     if isinstance(obj, dict):
         return {str(k): _serialize(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
         return [_serialize(x) for x in obj]
-    if hasattr(obj, "model_dump"):
+    if hasattr(obj, "model_dump"):        # Pydantic v2
         return _serialize(obj.model_dump())
     if hasattr(obj, "__dict__"):
         return _serialize(obj.__dict__)
     return str(obj)
 
 
+def _pretty(snake: str) -> str:
+    """Convert snake_case to TitleCase for trace log readability."""
+    return "".join(x.title() for x in snake.split("_"))
+
+
 def _summarize_update(update: Any) -> Any:
-    """Create short summary of state update."""
+    """Compact representation of a state update dict."""
     if not isinstance(update, dict):
-        return str(update)[:100]
-    summary = {}
+        return str(update)[:120]
+    summary: Dict[str, str] = {}
     for k, v in update.items():
         if isinstance(v, list):
-            summary[k] = f"list (len={len(v)})"
+            summary[k] = f"list({len(v)})"
         elif isinstance(v, dict):
-            summary[k] = f"dict (keys={list(v.keys())})"
+            summary[k] = f"dict(keys={list(v.keys())})"
         else:
-            summary[k] = str(v)[:60]
+            summary[k] = str(v)[:80]
     return summary
 
 
 def _summarize_tool_output(output: Any) -> str:
-    """Summarize tool output for concise trace log."""
+    """One-line summary of a tool's return value for the trace log."""
     if isinstance(output, list):
         return f"{len(output)} items returned"
     if isinstance(output, dict):
         if "booking_id" in output:
-            return f"Booking Confirmed ({output['booking_id']})"
+            return f"Booking Confirmed — {output['booking_id']}"
         if "transaction_id" in output:
-            return f"Payment Processed ({output['transaction_id']})"
+            return f"Payment Processed — {output['transaction_id']}"
         if "reservation_id" in output:
-            return f"Reservation Confirmed ({output['reservation_id']})"
-        return f"Returned dict with keys: {list(output.keys())}"
-    return str(output)[:100]
+            return f"Reservation Confirmed — {output['reservation_id']}"
+        return f"dict with keys: {list(output.keys())}"
+    return str(output)[:120]

@@ -10,6 +10,7 @@ import logging
 import os
 import uuid
 from typing import Any
+from app.tracing import get_tracker
 
 try:
     import chromadb
@@ -45,19 +46,11 @@ def store_preference(
     preference: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Store a learned user preference.
+    """Store a learned user preference."""
+    tracker = get_tracker()
+    if tracker:
+        tracker.track_memory_op("Store Preference", f"{category}:{user_id}", preference)
 
-    Parameters
-    ----------
-    user_id : str
-        The ID of the user.
-    category : str
-        Category (e.g., 'food', 'budget', 'airlines').
-    preference : str
-        The raw text preference (e.g., 'Prefers window seats on flights').
-    metadata : dict, optional
-        Additional structured data to store.
-    """
     collection = _get_collection()
     if not collection:
         logger.warning(f"Mock storing preference: {preference} for user {user_id}")
@@ -66,7 +59,6 @@ def store_preference(
     doc_id = str(uuid.uuid4())
     meta = {"user_id": user_id, "category": category}
     if metadata:
-        # Chroma metadata values must be strings, ints, or floats
         for k, v in metadata.items():
             if isinstance(v, (dict, list)):
                 meta[k] = json.dumps(v)
@@ -82,22 +74,7 @@ def store_preference(
 
 
 def retrieve_preferences(user_id: str, query: str, n_results: int = 5) -> list[dict]:
-    """Retrieve relevant user preferences using semantic search.
-
-    Parameters
-    ----------
-    user_id : str
-        The ID of the user.
-    query : str
-        The semantic query (e.g., 'What kind of food do they like?').
-    n_results : int, default=5
-        Number of results to return.
-
-    Returns
-    -------
-    list[dict]
-        List of matching preferences with metadata.
-    """
+    """Retrieve relevant user preferences using semantic search."""
     collection = _get_collection()
     if not collection:
         logger.warning("Mock retrieving preferences, returning empty.")
@@ -123,5 +100,9 @@ def retrieve_preferences(user_id: str, query: str, n_results: int = 5) -> list[d
                 "category": meta.get("category", "general"),
                 "metadata": meta,
             })
+
+    tracker = get_tracker()
+    if tracker:
+        tracker.track_memory_op("Retrieve Preferences", f"query:{query}", preferences)
 
     return preferences

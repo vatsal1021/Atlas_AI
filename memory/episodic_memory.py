@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import uuid
+from app.tracing import get_tracker
 
 try:
     import chromadb
@@ -36,26 +37,17 @@ def _get_collection():
 
 
 def store_episode(episode: dict) -> None:
-    """Store a session summary.
+    """Store a session summary."""
+    tracker = get_tracker()
+    if tracker:
+        tracker.track_memory_op("Store Episode", episode.get("destination", "Trip"), episode)
 
-    Expected keys in episode:
-    - user_id: str
-    - destination: str
-    - dates: str
-    - budget: str/float
-    - plan_summary: str
-    - satisfaction_score: float
-    - lessons_learned: list[str]
-    - timestamp: float
-    """
     collection = _get_collection()
     if not collection:
         logger.warning("Mock storing episode. ChromaDB not available.")
         return
 
     doc_id = f"ep_{uuid.uuid4().hex[:12]}"
-    
-    # The main semantic content is the summary + lessons
     content = f"Trip to {episode.get('destination')}. {episode.get('plan_summary')}\nLessons: {', '.join(episode.get('lessons_learned', []))}"
     
     meta = {
@@ -95,4 +87,9 @@ def recall_similar_trips(query: str, n_results: int = 3) -> list[dict]:
                 "summary": doc,
                 "metadata": meta,
             })
+
+    tracker = get_tracker()
+    if tracker:
+        tracker.track_memory_op("Recall Trips", f"query:{query}", trips)
+
     return trips

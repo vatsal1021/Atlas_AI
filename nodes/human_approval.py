@@ -24,6 +24,7 @@ from schemas.approval_schema import (
     ApprovalStatus,
     ActionType,
 )
+from app.tracing import get_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,17 @@ def human_approval(state: TripState) -> dict[str, Any]:
         len(irreversible_actions),
     )
 
+    tracker = get_tracker()
+    if tracker:
+        tracker.record_event(
+            event_type="Human Approval Request",
+            component="Node",
+            component_name="human_approval",
+            input_payload=approval_request.model_dump(),
+            status="Started",
+        )
+        tracker.log_trace(f"[Approval] Requested for {len(irreversible_actions)} action(s)")
+
     # Interrupt the graph — LangGraph pauses here until the UI resumes
     try:
         from langgraph.types import interrupt
@@ -134,11 +146,20 @@ def human_approval(state: TripState) -> dict[str, Any]:
         try:
             decision = ApprovalResponse.model_validate(raw_decision)
         except Exception:
-            # If the UI sends a plain dict without Pydantic validation
             decision = ApprovalResponse(
                 approved=bool(raw_decision.get("approved", False)),
                 reason=str(raw_decision.get("reason", "")),
             )
+
+        if tracker:
+            tracker.record_event(
+                event_type="Human Approval Response",
+                component="Node",
+                component_name="human_approval",
+                output_response=decision.model_dump(),
+                status="Approved" if decision.approved else "Rejected",
+            )
+            tracker.log_trace(f"[Approval] User decision: {'Approved' if decision.approved else 'Rejected'}\n")
 
         if decision.approved:
             logger.info("human_approval: User APPROVED.")

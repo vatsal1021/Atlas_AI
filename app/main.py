@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import uuid
 
 from app.config import configure_logging, get_settings
 from graph.graph import compile_graph
 from graph.planner_loop import create_initial_state
+from app.tracing import start_execution_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +36,12 @@ def main() -> None:
             print("No input provided. Exiting.")
             return
 
-    logger.info("Starting AtlasAI with input: %s", user_input)
-    print(f"\n📝 Processing: {user_input}\n")
+    # Start ExecutionTracker for full dual-file observability
+    run_id = uuid.uuid4().hex[:8]
+    tracker = start_execution_tracker(run_id=run_id, user_input=user_input)
+
+    logger.info("Starting AtlasAI [Run ID: %s] with input: %s", run_id, user_input)
+    print(f"\n📝 Processing: {user_input} (Run ID: {run_id})\n")
 
     # Build initial state
     initial_state = create_initial_state(
@@ -45,12 +51,18 @@ def main() -> None:
 
     # Compile and invoke graph
     graph = compile_graph()
+    config = {"configurable": {"thread_id": f"cli_{run_id}"}}
     print("🔄 Running planning loop...\n")
 
-    final_state = graph.invoke(initial_state)
-
-    # Display results
-    _print_results(final_state)
+    try:
+        final_state = graph.invoke(initial_state, config=config)
+        tracker.track_workflow_complete(success=True)
+        # Display results
+        _print_results(final_state)
+    except Exception as exc:
+        tracker.track_workflow_complete(success=False, error=str(exc))
+        print(f"\n❌ Execution failed: {exc}")
+        raise
 
 
 def _print_results(state: dict) -> None:
@@ -86,7 +98,7 @@ def _print_results(state: dict) -> None:
     world_facts = state.get("world_facts", [])
     if world_facts:
         print(f"\n🌐 World Facts ({len(world_facts)}):")
-        for fact in world_facts[:10]:  # Show first 10
+        for fact in world_facts[:10]:
             conf = fact.get("confidence", 0)
             print(f"   • [{conf:.0%}] {fact.get('statement', '')}")
 

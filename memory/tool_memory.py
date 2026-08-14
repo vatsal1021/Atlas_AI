@@ -11,15 +11,14 @@ import logging
 import os
 import time
 from typing import Any
+from app.tracing import get_tracker
 
 logger = logging.getLogger(__name__)
 
-# File storage path
 _DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "tool_stats.json"
 )
 
-# In-memory cache
 _STATS: dict[str, Any] = {}
 _LOADED = False
 
@@ -54,7 +53,7 @@ def record_tool_use(
 ) -> None:
     """Record a tool execution for stats tracking."""
     _load_stats()
-    
+
     if tool_name not in _STATS:
         _STATS[tool_name] = {
             "invocations": 0,
@@ -64,22 +63,29 @@ def record_tool_use(
             "common_errors": {},
             "last_used": 0,
         }
-        
+
     stat = _STATS[tool_name]
     stat["invocations"] += 1
     stat["last_used"] = time.time()
     stat["total_latency_ms"] += latency_ms
-    
+
     if success:
         stat["successes"] += 1
     else:
         stat["failures"] += 1
         if error:
-            # Simple error bucketing by first 30 chars
             err_key = error[:30] + "..." if len(error) > 30 else error
             stat["common_errors"][err_key] = stat["common_errors"].get(err_key, 0) + 1
-            
+
     _save_stats()
+
+    tracker = get_tracker()
+    if tracker:
+        tracker.track_memory_op(
+            op_type="Record Tool Stats",
+            category_or_key=tool_name,
+            payload={"success": success, "latency_ms": latency_ms, "error": error},
+        )
 
 
 def get_tool_stats(tool_name: str) -> dict[str, Any]:
@@ -88,7 +94,7 @@ def get_tool_stats(tool_name: str) -> dict[str, Any]:
     stat = _STATS.get(tool_name, {})
     if not stat:
         return {"success_rate": 1.0, "avg_latency_ms": 0, "invocations": 0}
-        
+
     invocations = stat["invocations"]
     return {
         "success_rate": stat["successes"] / invocations if invocations else 1.0,
@@ -108,12 +114,5 @@ def get_all_tool_stats() -> dict[str, dict]:
 
 
 def get_best_tool_for(capability: str) -> str:
-    """Recommend the most reliable tool for a given capability.
-    
-    In a real system, there would be a mapping of capability -> list[tool_name].
-    For now, this just returns the capability string assuming 1:1 mapping,
-    but it could easily be extended.
-    """
-    # Stub implementation. Example: if capability == 'flight_search', 
-    # compare stats of 'amadeus_flights' vs 'skyscanner_flights'
+    """Recommend the most reliable tool for a given capability."""
     return capability
