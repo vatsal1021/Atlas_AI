@@ -100,10 +100,17 @@ class ExecutionTracker:
         self.status: str = "Running"
         self.current_node: Optional[str] = None
 
-        # Wipe existing files (safe when re-using same run_id, e.g. in tests)
-        for f in (self.json_file, self.log_file):
-            if f.exists():
+        # Wipe existing run files & tool-specific JSON files for this run_id
+        for f in self.base_dir.glob(f"runtime_{self.run_id}*.json"):
+            try:
                 f.unlink()
+            except Exception:
+                pass
+        if self.log_file.exists():
+            try:
+                self.log_file.unlink()
+            except Exception:
+                pass
 
         # Trace header
         started_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -237,7 +244,10 @@ class ExecutionTracker:
         error: Optional[Any] = None,
         node_name: Optional[str] = None,
     ) -> None:
-        """Log a tool invocation with inputs, outputs, and status."""
+        """Log a tool invocation with inputs, outputs, and status.
+
+        Also updates the tool-specific JSON file (runtime_<run_id>_tool_<tool_name>.json).
+        """
         node = node_name or self.current_node
         self.record_event(
             event_type="Tool Call",
@@ -250,6 +260,9 @@ class ExecutionTracker:
             error_details=error,
             metadata={"node": node},
         )
+        # Flush dedicated tool JSON file
+        self._flush_tool_json(tool_name, input_params, output, status, error, node)
+
         # Human-readable trace block
         params_str = json.dumps(input_params, default=str)
         if len(params_str) > 200:
@@ -403,6 +416,57 @@ class ExecutionTracker:
 
         with open(self.json_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
+
+    def _flush_tool_json(
+        self,
+        tool_name: str,
+        input_params: Any,
+        output: Any,
+        status: str,
+        error: Optional[Any],
+        node_name: Optional[str],
+    ) -> None:
+        """Auto-generate and update a dedicated JSON file for a specific tool in runtime/."""
+        tool_file = self.base_dir / f"runtime_{self.run_id}_tool_{tool_name}.json"
+
+        # Load existing data if file exists
+        if tool_file.exists():
+            try:
+                with open(tool_file, "r", encoding="utf-8") as f:
+                    tool_data = json.load(f)
+            except Exception:
+                tool_data = {}
+        else:
+            tool_data = {}
+
+        invocations = tool_data.get("invocations", [])
+        invocation_entry = {
+            "invocation_index": len(invocations) + 1,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "node": node_name or self.current_node,
+            "status": status,
+            "input_params": _serialize(input_params),
+            "output": _serialize(output),
+            "error": _serialize(error),
+        }
+        invocations.append(invocation_entry)
+
+        successful_count = sum(1 for inv in invocations if inv.get("status") == "Success")
+        failed_count = sum(1 for inv in invocations if inv.get("status") != "Success")
+
+        updated_tool_data = {
+            "run_id": self.run_id,
+            "tool_name": tool_name,
+            "user_input": self.user_input,
+            "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "total_invocations": len(invocations),
+            "successful_invocations": successful_count,
+            "failed_invocations": failed_count,
+            "invocations": invocations,
+        }
+
+        with open(tool_file, "w", encoding="utf-8") as f:
+            json.dump(updated_tool_data, f, indent=2, default=str)
 
 
 # ---------------------------------------------------------------------------

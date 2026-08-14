@@ -1,60 +1,61 @@
-"""Application-level constants, defaults, and feature flags.
-
-These values are NOT loaded from the environment -- they are compile-time
-constants or phase-gated feature flags.
-"""
+"""Application-level constants, defaults, and feature flags."""
 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_CURRENCY: str = "INR"
-DEFAULT_MAX_ITERATIONS: int = 10
+DEFAULT_MAX_REACT_ITERATIONS: int = 8
+DEFAULT_MAX_REFLECT_ITERATIONS: int = 3
 DEFAULT_TEMPERATURE: float = 0.3
-DEFAULT_MAX_RECOVERY_ATTEMPTS: int = 3
+DEFAULT_TEMPERATURE_FAST: float = 0.0   # for IntentNode classification calls
 
 # ---------------------------------------------------------------------------
-# Feature Flags  (toggled as phases are implemented)
+# Feature Flags
 # ---------------------------------------------------------------------------
-ENABLE_REFLECTION: bool = True        # Phase 2
-ENABLE_CRITIC: bool = True            # Phase 2
-ENABLE_EXPLAINABILITY: bool = True    # Phase 2
-ENABLE_HUMAN_APPROVAL: bool = True    # Phase 3
-ENABLE_BOOKING: bool = True           # Phase 3
-ENABLE_META_REASONING: bool = True    # Phase 3
-ENABLE_MULTI_AGENT: bool = False      # Phase 3 (skeleton only)
+ENABLE_CRITIC: bool = True              # run CriticGate / CriticNode
+ENABLE_HUMAN_APPROVAL: bool = True      # interrupt for irreversible actions
+ENABLE_MULTI_AGENT: bool = False        # multi-agent collaboration (future)
 
 # ---------------------------------------------------------------------------
-# Simulation flags (for testing meta-reasoning)
+# Tools that require human approval before execution
 # ---------------------------------------------------------------------------
-SIMULATE_PAYMENT_FAILURE: bool = False
-USE_MULTI_AGENT: bool = False
+IRREVERSIBLE_TOOLS: set[str] = {
+    "book_flight",
+    "book_hotel",
+    "make_reservation",
+    "process_payment",
+    "cancel_booking",
+}
 
 # ---------------------------------------------------------------------------
-# Supported categories for sub-goals
+# CriticGate heuristics — trigger Critic when any of these are true
 # ---------------------------------------------------------------------------
-SUB_GOAL_CATEGORIES: list[str] = [
-    "travel",
-    "accommodation",
-    "transport",
-    "food",
-    "activities",
-    "budget",
-    "booking",
-]
+CRITIC_TRIGGER_TOOLS: set[str] = {
+    "book_flight",
+    "book_hotel",
+    "make_reservation",
+    "process_payment",
+    "cancel_booking",
+}
+CRITIC_REACT_ITERATION_THRESHOLD: int = 3   # ran ≥ this many ReAct steps
 
 # ---------------------------------------------------------------------------
-# Tool registry name -> module path  (used by capability_dispatcher)
+# Tool registry  name → module path  (used by ToolExecutionNode)
 # ---------------------------------------------------------------------------
 TOOL_REGISTRY: dict[str, str] = {
-    "search_flights": "tools.travel_research",
-    "search_hotels": "tools.travel_research",
-    "get_weather": "tools.weather",
-    "check_constraints": "tools.constraint_checker",
-    "load_preferences": "tools.memory",
-    "book_flight": "tools.booking",
-    "book_hotel": "tools.booking",
-    "make_reservation": "tools.reservation",
-    "process_payment": "tools.payment",
-    "optimize_route": "tools.route_optimizer",
+    # Research
+    "search_flights":        "tools.travel_research",
+    "search_hotels":         "tools.travel_research",
+    "get_weather":           "tools.weather",
+    "optimize_route":        "tools.route_optimizer",
     "generate_alternatives": "tools.alternative_generator",
+    # Constraints & memory
+    "check_constraints":     "tools.constraint_checker",
+    "load_preferences":      "tools.memory",
+    # Booking & payment
+    "book_flight":           "tools.booking",
+    "book_hotel":            "tools.booking",
+    "make_reservation":      "tools.reservation",
+    "process_payment":       "tools.payment",
+    "cancel_booking":        "tools.booking",
 }

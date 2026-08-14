@@ -1,154 +1,152 @@
-"""Conditional routing functions for the LangGraph state graph.
+"""Conditional routing functions for the new AtlasAI LangGraph state graph.
 
-Each function takes a TripState and returns a string node name
-that determines the next edge to follow.
+Each function takes a TripState and returns the string name of the next node.
+All routing is state-driven — no hardcoded workflow sequences.
 """
 
 from __future__ import annotations
 
 import logging
 
-from graph.state import TripState
-from app.settings import (
-    ENABLE_REFLECTION,
-    ENABLE_CRITIC,
-    ENABLE_EXPLAINABILITY,
-    ENABLE_HUMAN_APPROVAL,
-)
-from graph.edges import (
-    EVIDENCE_AGGREGATOR,
-    GOAL_EVALUATOR,
-    GOAL_DECOMPOSITION,
-    OBJECTIVE_PLANNER,
-    CAPABILITY_DISPATCHER,
-    WORLD_MODEL,
-    REFLECTION,
-    CRITIC,
-    EXPLAINABILITY,
-    HUMAN_APPROVAL,
-    ACTION_DISPATCHER,
-    META_REASONER,
-    MEMORY_UPDATE,
-)
 from langgraph.graph import END
+
+from graph.state import TripState
+from graph.edges import (
+    INTENT_NODE,
+    IRRELEVANT_RESPONSE,
+    ENTITY_EXTRACT,
+    NEGOTIATION_CLASSIFY,
+    NEGOTIATION_QUESTION,
+    PLAN_PROPOSAL,
+    REACT,
+    TOOL_EXECUTION,
+    HUMAN_APPROVAL,
+    REFLECT,
+    CRITIC_GATE,
+    CRITIC,
+    RELEVANT_RESPONSE,
+)
+from app.settings import DEFAULT_MAX_REACT_ITERATIONS, DEFAULT_MAX_REFLECT_ITERATIONS
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Helper: terminal routing — what comes after the QA / planning phase
+# Entry: IntentNode (Relevance Gate)
 # ---------------------------------------------------------------------------
 
-def _terminal_route(state: TripState) -> str:
-    """After the plan is complete, decide the next gate."""
-    if ENABLE_HUMAN_APPROVAL:
+def route_after_intent_relevance(state: TripState) -> str:
+    """Route after relevance gate: relevant → entity extract, else → irrelevant response."""
+    classification = state.get("intent_classification", "irrelevant")
+    if classification == "relevant":
+        return ENTITY_EXTRACT
+    return IRRELEVANT_RESPONSE
+
+
+# ---------------------------------------------------------------------------
+# After EntityExtractNode → always NegotiationClassify
+# (This is a fixed edge — no conditional router needed here)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# NegotiationClassificationNode
+# ---------------------------------------------------------------------------
+
+def route_after_negotiation_classify(state: TripState) -> str:
+    """needs_information → question, information_complete → path gate."""
+    status = state.get("negotiation_status", "information_complete")
+    if status == "needs_information":
+        return NEGOTIATION_QUESTION
+    # Flip intent_gate_mode so IntentNode acts as path gate on next call
+    return INTENT_NODE
+
+
+# ---------------------------------------------------------------------------
+# IntentNode (Path Gate)
+# ---------------------------------------------------------------------------
+
+def route_after_intent_path(state: TripState) -> str:
+    """plan → PlanProposal, direct_execute → React."""
+    decision = state.get("path_decision", "direct_execute")
+    if decision == "plan":
+        return PLAN_PROPOSAL
+    return REACT
+
+
+# ---------------------------------------------------------------------------
+# ReactNode
+# ---------------------------------------------------------------------------
+
+def route_after_react(state: TripState) -> str:
+    """Route based on react_decision; enforce max_react_iterations guard."""
+    react_iter = state.get("react_iteration", 0)
+    max_iter = state.get("max_react_iterations", DEFAULT_MAX_REACT_ITERATIONS)
+
+    # Guard: force reflect if max iterations exceeded
+    if react_iter >= max_iter:
+        logger.warning("route_after_react: max_react_iterations=%d reached — forcing reflect", max_iter)
+        return REFLECT
+
+    decision = state.get("react_decision", "respond")
+
+    if decision == "act":
+        return TOOL_EXECUTION
+    if decision == "critical_action":
         return HUMAN_APPROVAL
-    return MEMORY_UPDATE
+    # respond | complete → reflect
+    return REFLECT
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 / 2 routers
+# ToolExecutionNode → always back to React
+# (Fixed edge — no conditional router needed here)
 # ---------------------------------------------------------------------------
 
-
-def route_after_evaluator(state: TripState) -> str:
-    """Decide where to go after evaluation."""
-    goal_satisfied = state.get("goal_satisfied", False)
-    iteration = state.get("planner_iteration", 0)
-    max_iter = state.get("max_iterations", 10)
-
-    # Goal met OR max iterations reached → begin QA / terminal phase
-    if goal_satisfied or iteration >= max_iter:
-        if ENABLE_REFLECTION:
-            return REFLECTION
-        elif ENABLE_CRITIC:
-            return CRITIC
-        elif ENABLE_EXPLAINABILITY:
-            return EXPLAINABILITY
-        return _terminal_route(state)
-
-    # Otherwise loop back to the planner for another iteration
-    return OBJECTIVE_PLANNER
-
-
-def route_after_reflection(state: TripState) -> str:
-    """Route after reflection.
-
-    If reflection found gaps and revisions remain, send back to planner.
-    Otherwise hand off to critic / explainability / terminal gate.
-    """
-    has_gaps = bool(state.get("reflection_gaps", []))
-    revision_count = state.get("revision_count", 0)
-    max_revisions = state.get("max_revisions", 2)
-
-    if has_gaps and revision_count < max_revisions:
-        return OBJECTIVE_PLANNER
-
-    if ENABLE_CRITIC:
-        return CRITIC
-    elif ENABLE_EXPLAINABILITY:
-        return EXPLAINABILITY
-    return _terminal_route(state)
-
-
-def route_after_critic(state: TripState) -> str:
-    """Route after critic.
-
-    If critic flagged revisions and we have budget left, send back to planner.
-    Otherwise proceed to explainability / terminal gate.
-    """
-    should_revise = state.get("critic_should_revise", False)
-    revision_count = state.get("revision_count", 0)
-    max_revisions = state.get("max_revisions", 2)
-
-    if should_revise and revision_count < max_revisions:
-        return OBJECTIVE_PLANNER
-
-    if ENABLE_EXPLAINABILITY:
-        return EXPLAINABILITY
-    return _terminal_route(state)
-
-
 # ---------------------------------------------------------------------------
-# Phase 3 routers
+# HumanApprovalNode
 # ---------------------------------------------------------------------------
-
-
-def route_after_explainability(state: TripState) -> str:
-    """Route after explainability. Go to approval or directly to memory update."""
-    return _terminal_route(state)
-
 
 def route_after_approval(state: TripState) -> str:
-    """Route after human approval gate."""
+    """approved → tool execution, rejected → back to react."""
     status = state.get("approval_status", "")
-    if status == "rejected":
-        return META_REASONER
-    # approved or not_needed → execute actions
-    return ACTION_DISPATCHER
+    if status == "approved":
+        return TOOL_EXECUTION
+    # rejected or not_needed → let react reason about alternatives
+    return REACT
 
 
-def route_after_action_dispatcher(state: TripState) -> str:
-    """Route after action dispatcher. If errors occurred, escalate to meta-reasoner."""
-    if state.get("errors"):
-        return META_REASONER
-    return MEMORY_UPDATE
+# ---------------------------------------------------------------------------
+# ReflectNode
+# ---------------------------------------------------------------------------
+
+def route_after_reflect(state: TripState) -> str:
+    """needs_more_work (within limit) → react; complete or limit exceeded → critic gate."""
+    decision = state.get("reflect_decision", "complete")
+    reflect_iter = state.get("reflect_iteration", 0)
+    max_reflect = state.get("max_reflect_iterations", DEFAULT_MAX_REFLECT_ITERATIONS)
+
+    if decision == "needs_more_work" and reflect_iter < max_reflect:
+        return REACT
+
+    if reflect_iter >= max_reflect:
+        logger.warning("route_after_reflect: max_reflect_iterations=%d reached — forcing critic gate", max_reflect)
+
+    return CRITIC_GATE
 
 
-def route_after_meta_reasoning(state: TripState) -> str:
-    """Route based on the recovery strategy chosen by the meta-reasoner."""
-    history = state.get("failure_history", [])
-    if not history:
-        return END
+# ---------------------------------------------------------------------------
+# CriticGate
+# ---------------------------------------------------------------------------
 
-    last_strategy = history[-1].get("strategy", "escalate")
+def route_after_critic_gate(state: TripState) -> str:
+    """critic_required → critic, skip → relevant response."""
+    gate = state.get("critic_gate_decision", "skip")
+    if gate == "critic_required":
+        return CRITIC
+    return RELEVANT_RESPONSE
 
-    if last_strategy == "retry":
-        return CAPABILITY_DISPATCHER
-    elif last_strategy in ("alternative", "partial_replan"):
-        return OBJECTIVE_PLANNER
-    elif last_strategy == "full_replan":
-        return GOAL_DECOMPOSITION
 
-    # escalate → end the graph
-    return END
+# ---------------------------------------------------------------------------
+# CriticNode → always RelevantResponse
+# (Fixed edge — no conditional router needed here)
+# ---------------------------------------------------------------------------

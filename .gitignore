@@ -48,3 +48,7 @@ data/*.json
 
 # Log files
 *.log
+
+# Runtime and Traces
+runtime/*.json
+runtime/traces/

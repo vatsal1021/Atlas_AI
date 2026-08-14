@@ -44,25 +44,25 @@ START
       ↓ irrelevant/empty
   → IrrelevantResponseNode → END
       ↓ relevant
-  → CollectionEntityExtractNode
+  → EntityExtractNode
       → NegotiationClassificationNode
           ↓ needs_information
           → NegotiationQuestionNode → END
           ↓ information_complete
           → IntentNode (Path Gate)
               ↓ plan
-              → PlanProposalDirectiveNode → CollectionReactNode
+              → PlanProposalDirectiveNode → ReactNode
               ↓ direct_execute
-              → CollectionReactNode
+              → ReactNode
                   ↓ act
-                  → ToolExecutionNode → CollectionReactNode (loop)
+                  → ToolExecutionNode → ReactNode (loop)
                   ↓ critical action
                   → HumanApprovalNode
                       ↓ approved → ToolExecutionNode
-                      ↓ rejected → CollectionReactNode
+                      ↓ rejected → ReactNode
                   ↓ respond / complete
-                  → CollectionReflectNode
-                      ↓ needs_more_work → CollectionReactNode
+                  → ReflectNode
+                      ↓ needs_more_work → ReactNode
                       ↓ complete → CriticGate
                           ↓ skip → RelevantResponseNode → END
                           ↓ critic_required → CriticNode → RelevantResponseNode → END
@@ -130,7 +130,7 @@ This node is called **twice** in the logical flow but is **one node function** t
 
 ---
 
-### 3.3 `CollectionEntityExtractNode` (`entity_extract`)
+### 3.3 `EntityExtractNode` (`entity_extract`)
 - Only triggered when intent is `relevant`.
 - Performs LLM-based structured extraction of travel entities from `user_input` AND the existing `conversation_history` (persistent state from prior turns).
 - Extracts:
@@ -172,7 +172,7 @@ This node is called **twice** in the logical flow but is **one node function** t
 
 ### 3.6 `PlanProposalDirectiveNode` (`plan_proposal`)
 - Only triggered when `PathGate` returns `plan`.
-- Produces a **structured planning directive** that `CollectionReactNode` will use as its guiding objective. This is NOT tool execution — it is thinking and structuring.
+- Produces a **structured planning directive** that `ReactNode` will use as its guiding objective. This is NOT tool execution — it is thinking and structuring.
 - Directive contains:
   ```json
   {
@@ -185,11 +185,11 @@ This node is called **twice** in the logical flow but is **one node function** t
   ```
 - Also writes `multi_agent_hint` — a lightweight struct that identifies which specialised sub-agent roles would be relevant (Travel Planner, Budget Agent, Local Expert, Booking Specialist). This is the extension point for future multi-agent collaboration.
 - Writes `planning_directive` to state.
-- Always routes to `CollectionReactNode`.
+- Always routes to `ReactNode`.
 
 ---
 
-### 3.7 `CollectionReactNode` (`react`)
+### 3.7 `ReactNode` (`react`)
 - The **central reasoning engine** of the new architecture.
 - Implements the ReAct (Reason + Act) pattern.
 - On each invocation, it:
@@ -213,25 +213,25 @@ This node is called **twice** in the logical flow but is **one node function** t
 - Validates arguments against the tool's expected schema.
 - Executes the tool function.
 - Writes the result into `tool_observations: list[{tool, arguments, result, status, timestamp}]`.
-- On success: routes back to `CollectionReactNode`.
-- On failure: writes error into `tool_observations` (marked as failed) and routes back to `CollectionReactNode` — ReAct decides how to recover, not a separate meta-reasoner.
+- On success: routes back to `ReactNode`.
+- On failure: writes error into `tool_observations` (marked as failed) and routes back to `ReactNode` — ReAct decides how to recover, not a separate meta-reasoner.
 
 ---
 
 ### 3.9 `HumanApprovalNode` (`human_approval`)
 - **Updated** from the existing implementation — same `interrupt()` mechanism is preserved.
-- Triggered only when `CollectionReactNode` sets `requires_approval: true`.
+- Triggered only when `ReactNode` sets `requires_approval: true`.
 - Reads `pending_tool_call` and generates a dynamic, friendly approval message using the LLM (this already works in the current implementation).
 - Uses `langgraph.types.interrupt()` to pause the graph.
 - On resume:
   - `approved: true` → routes to `ToolExecutionNode` (executes the approved action)
-  - `approved: false` → writes rejection + reason to state, routes back to `CollectionReactNode` so it can reason about an alternative
+  - `approved: false` → writes rejection + reason to state, routes back to `ReactNode` so it can reason about an alternative
 - The existing `ApprovalRequest`, `ApprovalResponse`, `ApprovalAction`, `ApprovalStatus`, and `ActionType` schemas from `schemas/approval_schema.py` are **fully preserved**.
 
 ---
 
-### 3.10 `CollectionReflectNode` (`reflect`)
-- Triggered when `CollectionReactNode` says `respond` or `complete`.
+### 3.10 `ReflectNode` (`reflect`)
+- Triggered when `ReactNode` says `respond` or `complete`.
 - Evaluates whether the work done is actually sufficient, by checking:
   - Is the `objective` (from `planning_directive` or extracted entities) satisfied?
   - Are all hard `constraints` met?
@@ -239,7 +239,7 @@ This node is called **twice** in the logical flow but is **one node function** t
   - Is there enough information to generate a high-quality response?
   - For zero-tool plans: is the response ready as-is?
 - Output decision:
-  - `needs_more_work` — routes back to `CollectionReactNode` with `reflect_feedback` written to state (ReAct reads this)
+  - `needs_more_work` — routes back to `ReactNode` with `reflect_feedback` written to state (ReAct reads this)
   - `complete` — routes to `CriticGate`
 - Has a **max_reflect_iterations** guard to prevent infinite reflect-react cycles.
 - A plan with zero tool calls can pass reflection — e.g., a Jaipur itinerary generated from LLM knowledge.
@@ -420,17 +420,17 @@ RELEVANT_RESPONSE      = "relevant_response"
 | `NegotiationClassificationNode` | `needs_information` | `NegotiationQuestionNode` |
 | `NegotiationClassificationNode` | `information_complete` | `IntentNode` (Path Gate) |
 | `IntentNode` (Path Gate) | `plan` | `PlanProposalDirectiveNode` |
-| `IntentNode` (Path Gate) | `direct_execute` | `CollectionReactNode` |
-| `PlanProposalDirectiveNode` | always | `CollectionReactNode` |
-| `CollectionReactNode` | `act` | `ToolExecutionNode` |
-| `CollectionReactNode` | `critical_action` | `HumanApprovalNode` |
-| `CollectionReactNode` | `respond` or `complete` | `CollectionReflectNode` |
-| `CollectionReactNode` | `max_react_iterations exceeded` | `CollectionReflectNode` (forced) |
-| `ToolExecutionNode` | always (success or failure) | `CollectionReactNode` |
+| `IntentNode` (Path Gate) | `direct_execute` | `ReactNode` |
+| `PlanProposalDirectiveNode` | always | `ReactNode` |
+| `ReactNode` | `act` | `ToolExecutionNode` |
+| `ReactNode` | `critical_action` | `HumanApprovalNode` |
+| `ReactNode` | `respond` or `complete` | `ReflectNode` |
+| `ReactNode` | `max_react_iterations exceeded` | `ReflectNode` (forced) |
+| `ToolExecutionNode` | always (success or failure) | `ReactNode` |
 | `HumanApprovalNode` | `approved` | `ToolExecutionNode` |
-| `HumanApprovalNode` | `rejected` | `CollectionReactNode` |
-| `CollectionReflectNode` | `needs_more_work` AND `reflect_iteration < max` | `CollectionReactNode` |
-| `CollectionReflectNode` | `complete` OR `max_reflect_iterations exceeded` | `CriticGate` |
+| `HumanApprovalNode` | `rejected` | `ReactNode` |
+| `ReflectNode` | `needs_more_work` AND `reflect_iteration < max` | `ReactNode` |
+| `ReflectNode` | `complete` OR `max_reflect_iterations exceeded` | `CriticGate` |
 | `CriticGate` | `skip` | `RelevantResponseNode` |
 | `CriticGate` | `critic_required` | `CriticNode` |
 | `CriticNode` | always | `RelevantResponseNode` |
@@ -442,22 +442,22 @@ RELEVANT_RESPONSE      = "relevant_response"
 
 ## 6. ReAct / Tool-Calling Loop
 
-The only **internal loop** in the graph is between `CollectionReactNode` and `ToolExecutionNode`.
+The only **internal loop** in the graph is between `ReactNode` and `ToolExecutionNode`.
 
 ### Loop Mechanics
-1. `CollectionReactNode` selects a tool → writes `pending_tool_call = {tool, args, reasoning}`.
+1. `ReactNode` selects a tool → writes `pending_tool_call = {tool, args, reasoning}`.
 2. `ToolExecutionNode` executes → appends `{tool, args, result, status}` to `tool_observations`.
-3. Control returns to `CollectionReactNode`.
+3. Control returns to `ReactNode`.
 4. ReAct reads the new `tool_observations` entry and decides next action.
 5. This continues until ReAct decides `respond` or `complete`.
 
 ### Loop Guard
 - `react_iteration` increments on every ReAct invocation.
-- When `react_iteration >= max_react_iterations` (default: 8), the router forces `CollectionReflectNode` regardless of `react_decision`.
+- When `react_iteration >= max_react_iterations` (default: 8), the router forces `ReflectNode` regardless of `react_decision`.
 - This prevents runaway loops.
 
 ### Tool Selection Memory
-- `ToolSelectionMemory` is a **helper class** (not a graph node) used inside `CollectionReactNode`.
+- `ToolSelectionMemory` is a **helper class** (not a graph node) used inside `ReactNode`.
 - Located at `graph/tool_selection_memory.py`.
 - Stores per-session: tool success rates, avg latency, failure reasons.
 - ReAct prompt includes a summary: "Tools you've tried this session: …"
@@ -467,7 +467,7 @@ The only **internal loop** in the graph is between `CollectionReactNode` and `To
 A request can complete the ReAct loop with **zero tool calls**:
 - ReAct reads the `planning_directive` and determines it can answer from LLM knowledge.
 - Sets `react_decision = "respond"` without ever choosing `act`.
-- `CollectionReflectNode` sees `tool_observations = []` and evaluates if the response is still complete.
+- `ReflectNode` sees `tool_observations = []` and evaluates if the response is still complete.
 - If yes → proceeds to `CriticGate → RelevantResponseNode`.
 
 ---
@@ -475,7 +475,7 @@ A request can complete the ReAct loop with **zero tool calls**:
 ## 7. Human Approval Flow
 
 ### Trigger Condition
-`HumanApprovalNode` is triggered ONLY when `CollectionReactNode` sets `requires_approval: true`.
+`HumanApprovalNode` is triggered ONLY when `ReactNode` sets `requires_approval: true`.
 
 `requires_approval` is set when the tool selected belongs to the irreversible set:
 ```python
@@ -498,14 +498,14 @@ IRREVERSIBLE_TOOLS = {
 
 ### On Rejection
 - `approval_reason` is written to state.
-- Router sends back to `CollectionReactNode`.
+- Router sends back to `ReactNode`.
 - ReAct reads the rejection from `tool_observations` (the failed/rejected action is logged there) and reasons about an alternative — e.g., finding a different flight, adjusting the budget.
 
 ---
 
 ## 8. Reflection and Replanning Behaviour
 
-### What `CollectionReflectNode` checks
+### What `ReflectNode` checks
 1. **Objective satisfied?** — Does the result of tool calls meet the `planning_directive.objective`?
 2. **Constraints satisfied?** — Are all hard constraints (budget, dates, preferences) honoured?
 3. **Tool results valid?** — Are tool results non-empty, non-contradictory, and relevant?
@@ -513,12 +513,12 @@ IRREVERSIBLE_TOOLS = {
 5. **Zero-tool case** — If no tools were called, can the agent still generate a valuable response?
 
 ### Replanning vs. simple retry
-- If `CollectionReflectNode` says `needs_more_work`, it writes a `reflect_feedback` string to state.
-- `CollectionReactNode` reads `reflect_feedback` on its next iteration and uses it to adjust its reasoning.
+- If `ReflectNode` says `needs_more_work`, it writes a `reflect_feedback` string to state.
+- `ReactNode` reads `reflect_feedback` on its next iteration and uses it to adjust its reasoning.
 - If the planning directive itself is infeasible (e.g., budget too low for the selected hotels), `reflect_feedback` will say so explicitly, and ReAct will generate a different tool call or revise its response.
 
 ### Loop guard
-- `reflect_iteration` is incremented each time `CollectionReflectNode` says `needs_more_work`.
+- `reflect_iteration` is incremented each time `ReflectNode` says `needs_more_work`.
 - When `reflect_iteration >= max_reflect_iterations` (default: 3), routing forces `complete` → `CriticGate`.
 
 ---
@@ -566,7 +566,7 @@ The `config = {"configurable": {"thread_id": session_id}}` is already set in bot
 At the start of every new graph invocation:
 1. `EntityExtractNode` reads both `user_input` (new message) AND `extracted_entities` (prior state), and merges.
 2. `NegotiationClassificationNode` reads the combined picture to determine if information is now complete.
-3. `CollectionReactNode` reads `tool_observations` from the prior turn (if present) as context.
+3. `ReactNode` reads `tool_observations` from the prior turn (if present) as context.
 4. `conversation_history` is appended by `RelevantResponseNode` and `IrrelevantResponseNode` at END.
 
 ### Long-term memory (future)
@@ -582,13 +582,13 @@ At the start of every new graph invocation:
 |---|---|
 | `nodes/intent_node.py` | IntentNode (dual-role: relevance gate + path gate) |
 | `nodes/irrelevant_response.py` | IrrelevantResponseNode |
-| `nodes/entity_extract.py` | CollectionEntityExtractNode |
+| `nodes/entity_extract.py` | EntityExtractNode |
 | `nodes/negotiation_classification.py` | NegotiationClassificationNode |
 | `nodes/negotiation_question.py` | NegotiationQuestionNode |
 | `nodes/plan_proposal.py` | PlanProposalDirectiveNode |
-| `nodes/react.py` | CollectionReactNode (ReAct engine) |
+| `nodes/react.py` | ReactNode (ReAct engine) |
 | `nodes/tool_execution.py` | ToolExecutionNode |
-| `nodes/reflect.py` | CollectionReflectNode |
+| `nodes/reflect.py` | ReflectNode |
 | `nodes/critic_gate.py` | CriticGate (lightweight classifier) |
 | `nodes/relevant_response.py` | RelevantResponseNode |
 | `graph/tool_selection_memory.py` | ToolSelectionMemory helper class |
@@ -694,10 +694,10 @@ At the start of every new graph invocation:
 
 ### Risk 2: Dual-Role `IntentNode`
 **Problem:** The `IntentNode` acts as both a Relevance Gate and a Path Gate. Using the same node function for two roles requires reading `intent_gate_mode` from state and branching logic inside the node.  
-**Mitigation:** The routing in `graph.py` controls which conditional edge applies after each IntentNode invocation. Alternatively, split into two separate node functions (`intent_relevance_gate` and `intent_path_gate`) registered as two separate nodes for cleaner code — this is the **recommended approach** during implementation.
+**Mitigation:** The routing in `graph.py` controls which conditional edge applies after each `IntentNode` invocation. Alternatively, split into two separate node functions (`intent_relevance_gate` and `intent_path_gate`) registered as two separate nodes for cleaner code — this is the **recommended approach** during implementation.
 
 ### Risk 3: ReAct Loop Runaway
-**Problem:** If `CollectionReactNode` repeatedly decides `act` without making progress, `max_react_iterations` is the only guard.  
+**Problem:** If `ReactNode` repeatedly decides `act` without making progress, `max_react_iterations` is the only guard.  
 **Mitigation:** `max_react_iterations` is set conservatively to 8. The ReAct prompt explicitly instructs the model to respond/complete after repeated tool failures. `tool_observations` provides full context of what has been tried.
 
 ### Risk 4: `pending_tool_call` vs. `pending_tool_calls` (singular vs. plural)

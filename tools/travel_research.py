@@ -38,29 +38,18 @@ _AMENITIES_POOL = [
 
 
 def search_flights(
-    origin: str,
-    destination: str,
-    date: str,
+    origin: str = "Delhi",
+    destination: str = "",
+    date: str = "",
     passengers: int = 1,
+    **kwargs,
 ) -> list[dict]:
-    """Return mock flight options.
+    """Return mock flight options."""
+    destination = destination or kwargs.get("location") or kwargs.get("to") or "Jaipur"
+    origin = origin or kwargs.get("from") or "Delhi"
+    date = date or kwargs.get("departure_date") or kwargs.get("start_date") or datetime.now().strftime("%Y-%m-%d")
+    passengers = passengers or kwargs.get("guests") or kwargs.get("travelers") or 1
 
-    Parameters
-    ----------
-    origin : str
-        Origin city/airport code.
-    destination : str
-        Destination city/airport code.
-    date : str
-        Departure date ISO string.
-    passengers : int
-        Number of passengers.
-
-    Returns
-    -------
-    list[dict]
-        Serialised FlightOption dicts.
-    """
     logger.info(
         "search_flights  origin=%s  dest=%s  date=%s  pax=%s",
         origin, destination, date, passengers,
@@ -72,8 +61,8 @@ def search_flights(
     for i in range(num_options):
         airline_name, airline_code = rng.choice(_AIRLINES)
         stops = rng.choice([0, 0, 1, 1, 2])
-        base_price = rng.randint(15000, 85000)
-        duration = round(rng.uniform(3.0, 18.0), 1)
+        base_price = rng.randint(3000, 15000)
+        duration = round(rng.uniform(1.5, 6.0), 1)
 
         try:
             dep = datetime.fromisoformat(date).replace(
@@ -105,29 +94,18 @@ def search_flights(
 
 
 def search_hotels(
-    destination: str,
-    checkin: str,
-    checkout: str,
+    destination: str = "",
+    checkin: str = "",
+    checkout: str = "",
     guests: int = 1,
+    **kwargs,
 ) -> list[dict]:
-    """Return mock hotel options.
+    """Return mock hotel options."""
+    destination = destination or kwargs.get("location") or kwargs.get("city") or "Jaipur"
+    checkin = checkin or kwargs.get("start_date") or kwargs.get("check_in") or datetime.now().strftime("%Y-%m-%d")
+    checkout = checkout or kwargs.get("end_date") or kwargs.get("check_out") or (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    guests = guests or kwargs.get("travelers") or kwargs.get("people") or 1
 
-    Parameters
-    ----------
-    destination : str
-        Destination city.
-    checkin : str
-        Check-in date ISO string.
-    checkout : str
-        Check-out date ISO string.
-    guests : int
-        Number of guests.
-
-    Returns
-    -------
-    list[dict]
-        Serialised HotelOption dicts.
-    """
     logger.info(
         "search_hotels  dest=%s  checkin=%s  checkout=%s  guests=%s",
         destination, checkin, checkout, guests,
@@ -138,8 +116,8 @@ def search_hotels(
 
     for _ in range(num_options):
         name = rng.choice(_HOTEL_NAMES)
-        rating = round(rng.uniform(2.5, 5.0), 1)
-        price = rng.randint(2000, 25000)
+        rating = round(rng.uniform(3.5, 5.0), 1)
+        price = rng.randint(2000, 8000)
         amenities = rng.sample(_AMENITIES_POOL, k=rng.randint(3, 7))
 
         hotel = HotelOption(
@@ -149,7 +127,7 @@ def search_hotels(
             price_per_night=price,
             currency="INR",
             amenities=amenities,
-            review_score=round(rng.uniform(6.0, 9.8), 1),
+            review_score=round(rng.uniform(7.0, 9.8), 1),
             available=True,
         )
         results.append(hotel.model_dump())

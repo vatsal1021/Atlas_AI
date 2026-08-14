@@ -1,4 +1,4 @@
-"""Main Streamlit app entrypoint for AtlasAI."""
+"""Main Streamlit app entrypoint for AtlasAI — new architecture."""
 
 import sys
 import os
@@ -19,7 +19,37 @@ from ui.components.explanation_panel import render_explanation
 from ui.components.approval_card import render_approval_card
 from ui.components.sidebar import render_sidebar
 
-# Initialize app state
+configure_logging()
+
+
+# ── Helpers (must be defined before use in module-level code) ─────────────────
+
+def _node_label(node_name: str) -> str:
+    """Convert internal node names to friendly display labels."""
+    labels = {
+        "intent_node":               "Classifying your request...",
+        "irrelevant_response":       "Generating response...",
+        "entity_extract":            "Understanding your request...",
+        "negotiation_classification":"Checking if I need more info...",
+        "negotiation_question":      "Preparing a follow-up question...",
+        "path_gate_setter":          "Determining approach...",
+        "plan_proposal":             "Creating a planning strategy...",
+        "react":                     "Reasoning about next steps...",
+        "tool_execution":            "Gathering travel data...",
+        "human_approval":            "Waiting for your approval...",
+        "reflect":                   "Reviewing the plan quality...",
+        "critic_gate":               "Assessing plan complexity...",
+        "critic":                    "Running quality check...",
+        "relevant_response":         "Writing your travel plan...",
+    }
+    return labels.get(node_name, f"Running {node_name}...")
+
+
+def _already_shown(messages: list[dict], content: str) -> bool:
+    """Check if a message is already in the chat history."""
+    return any(m.get("content") == content for m in messages)
+
+# ── Session State Init ────────────────────────────────────────────────────────
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = "session_1"
 if "messages" not in st.session_state:
@@ -31,103 +61,116 @@ if "trip_state" not in st.session_state:
 if "resume_command" not in st.session_state:
     st.session_state.resume_command = None
 
-# Thread config for MemorySaver
 config = {"configurable": {"thread_id": st.session_state.thread_id}}
 
 st.set_page_config(page_title="AtlasAI Planner", page_icon="🌍", layout="wide")
-
 st.title("🌍 AtlasAI")
-st.caption("Autonomous, Goal-Driven Travel Planning Agent")
+st.caption("Your AI Travel Planning Companion")
 
-# Layout: Chat/Controls on Left, Visuals on Right
 col_chat, col_plan = st.columns([1, 1.5])
 
 with col_chat:
-    prompt = st.chat_input("Where do you want to go?")
-    
-    # Render chat history
+    # ── Chat Input ────────────────────────────────────────────────────────
+    prompt = st.chat_input("Ask me anything about your trip...")
+
+    # Render existing chat history
     render_chat(st.session_state.messages, current_node=None)
-    
+
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.trip_state = None
         st.session_state.resume_command = None
         st.rerun()
 
-# Processing logic (handles both initial runs and resuming from interrupt)
+# ── Graph Execution Logic ─────────────────────────────────────────────────────
 should_run_graph = False
 initial_state = None
+user_request = ""
 
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user" and not st.session_state.trip_state:
+last_msg = st.session_state.messages[-1] if st.session_state.messages else None
+
+if last_msg and last_msg["role"] == "user" and not st.session_state.trip_state:
     should_run_graph = True
-    user_request = st.session_state.messages[-1]["content"]
-    settings = get_settings()
-    initial_state = create_initial_state(user_request, max_iterations=settings.max_planner_iterations)
-    
+    user_request = last_msg["content"]
+    initial_state = create_initial_state(user_request)
+
 elif st.session_state.resume_command is not None:
     should_run_graph = True
-    initial_state = st.session_state.resume_command  # Pass the Command object
+    initial_state = st.session_state.resume_command  # Command object for resume
     st.session_state.resume_command = None
 
 if should_run_graph:
     with col_chat:
-        status_container = st.status("Agent is planning...", expanded=True)
-        
-        # Start execution tracker for this run
-        _user_req = user_request if "user_request" in locals() else "Resuming from interrupt"
-        tracker = start_execution_tracker(run_id=st.session_state.thread_id, user_input=_user_req)
-        
+        status_placeholder = st.empty()
+        node_log = []
+
+        tracker = start_execution_tracker(
+            run_id=st.session_state.thread_id,
+            user_input=user_request or "Resuming from interrupt",
+        )
+
         try:
             for event in st.session_state.graph.stream(initial_state, config=config):
                 for node_name, state_update in event.items():
-                    status_container.write(f"Executed node: **`{node_name}`**")
+                    node_log.append(node_name)
+                    friendly = _node_label(node_name)
+                    status_placeholder.status(
+                        f"⚙️ {friendly}",
+                        expanded=False,
+                    )
         except Exception as e:
             st.error(f"Graph execution error: {e}")
             tracker.track_workflow_complete(success=False, error=str(e))
-            
-        # Update session state with the latest graph state
+
+        # Retrieve latest graph state
         current_state = st.session_state.graph.get_state(config)
         if current_state and current_state.values:
             st.session_state.trip_state = current_state.values
-            
-        # Check if we hit an interrupt
+
+        # Show final_response as assistant message in chat
+        if current_state and current_state.values:
+            final_resp = current_state.values.get("final_response", "")
+            if final_resp and not _already_shown(st.session_state.messages, final_resp):
+                st.session_state.messages.append({"role": "assistant", "content": final_resp})
+
+        # Check if paused for human approval
         if current_state and current_state.next:
-            status_container.update(label="Paused for Approval!", state="error", expanded=True)
-            msg = "I need your approval before proceeding."
+            status_placeholder.empty()
+            approval_msg = "I need your approval before proceeding."
             if current_state.tasks:
                 for task in current_state.tasks:
                     if task.interrupts:
-                        msg = task.interrupts[0].value.get("message", msg)
+                        approval_msg = task.interrupts[0].value.get("message", approval_msg)
                         break
-                        
-            st.session_state.messages.append({"role": "assistant", "content": msg})
-        else:
-            status_container.update(label="Execution Complete!", state="complete", expanded=False)
-            if not any(m["content"] == "I've finished drafting your plan. Please review the details!" for m in st.session_state.messages):
-                msg = "I've finished drafting your plan. Please review the details!"
-                st.session_state.messages.append({"role": "assistant", "content": msg})
+            if not _already_shown(st.session_state.messages, approval_msg):
+                st.session_state.messages.append({"role": "assistant", "content": approval_msg})
             tracker.track_workflow_complete(success=True)
-                
+        else:
+            status_placeholder.empty()
+            tracker.track_workflow_complete(success=True)
+
         st.rerun()
 
-# Render visual plan state and Sidebar
+
+# ── Right Panel ───────────────────────────────────────────────────────────────
 state = st.session_state.trip_state
 render_sidebar(state)
 
 with col_plan:
     if state:
-        tab_plan, tab_explain, tab_approve = st.tabs(["🗺️ The Plan", "🧠 Explainability", "🔒 Approval & Bookings"])
-        
+        tab_plan, tab_explain, tab_approve = st.tabs(
+            ["🗺️ Plan Details", "🧠 Agent Insights", "🔒 Approval & Bookings"]
+        )
+
         with tab_plan:
             render_plan_view(state)
-            
+
         with tab_explain:
-            render_explanation(state.get("explanation"))
-            
+            render_explanation(state.get("response_metadata"))
+
         with tab_approve:
             render_approval_card(state, config=config, graph=st.session_state.graph)
-            
-            # Show booking results if any
+
             bookings = state.get("booking_results", [])
             payments = state.get("payment_results", [])
             if bookings or payments:
@@ -138,4 +181,7 @@ with col_plan:
                 for p in payments:
                     st.success(f"💳 Payment Processed: {p.get('transaction_id')} ({p.get('amount')} {p.get('currency')})")
     else:
-        st.info("Enter a destination to begin planning.")
+        st.info("Start a conversation to see your travel plan here.")
+
+
+

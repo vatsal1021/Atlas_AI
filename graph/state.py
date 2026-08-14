@@ -2,6 +2,8 @@
 
 TripState is the single TypedDict that all nodes read from and write to.
 Nodes return partial dicts with only the keys they want to update.
+
+New architecture: single-pass, intent-driven, ReAct-centred graph.
 """
 
 from __future__ import annotations
@@ -16,69 +18,69 @@ class TripState(TypedDict, total=False):
     The graph runner merges returned dicts into the accumulated state.
     """
 
-    # --- User Input ---
-    user_input: str
+    # ── Input ──────────────────────────────────────────────────────────
+    user_input: str                      # current user message
+    conversation_history: list[dict]     # [{role, content}] across all turns
+    thread_id: str                       # session identifier for persistence
 
-    # --- Goal Understanding ---
-    parsed_goal: dict  # serialised ParsedGoal
+    # ── Intent ─────────────────────────────────────────────────────────
+    intent_classification: str           # relevant | irrelevant | empty
+    intent_gate_mode: str                # relevance | path
+    path_decision: str                   # plan | direct_execute
 
-    # --- Goal Decomposition ---
-    sub_goals: list[dict]  # list of serialised SubGoal
+    # ── Entity Extraction ───────────────────────────────────────────────
+    extracted_entities: dict             # destination, budget, dates, travelers, etc.
 
-    # --- Planner ---
-    current_plan: list[dict]  # ordered planned actions
-    planner_iteration: int
-    planner_reasoning: list[str]  # chain-of-thought log
-    planning_complete: bool  # True when planner emits empty actions
+    # ── Negotiation ─────────────────────────────────────────────────────
+    negotiation_status: str              # needs_information | information_complete
+    missing_fields: list[str]            # fields the agent still needs
+    negotiation_reasoning: str           # why information is incomplete
+    negotiation_history: list[dict]      # [{question, answer}] per turn
 
-    # --- Tool dispatch ---
-    tool_results: dict  # keyed by tool name → raw results
-    pending_tool_calls: list[dict]  # PlannedAction dicts queued for dispatch
+    # ── Planning Directive ──────────────────────────────────────────────
+    planning_directive: dict             # objective, constraints, decisions, success_criteria
+    multi_agent_hint: dict               # future multi-agent extension point
 
-    # --- Evidence ---
-    evidence: dict  # aggregated structured evidence by category
+    # ── ReAct Loop ──────────────────────────────────────────────────────
+    react_decision: str                  # act | critical_action | respond | complete
+    pending_tool_call: dict              # {tool, arguments, reasoning}
+    requires_approval: bool              # True → triggers HumanApprovalNode
+    tool_observations: list[dict]        # [{tool, args, result, status, timestamp}]
+    react_reasoning_log: list[str]       # chain-of-thought entries per ReAct step
+    react_iteration: int                 # current ReAct step counter
+    max_react_iterations: int            # runaway-loop guard (default: 8)
 
-    # --- World Model ---
-    world_facts: list[dict]  # serialised WorldFact list
+    # ── Tool Selection Memory ───────────────────────────────────────────
+    tool_selection_memory: dict          # {tool_name: {success_rate, avg_latency, failures}}
 
-    # --- Quality Assurance (Phase 2) ---
-    revision_count: int
-    max_revisions: int
-    reflection_gaps: list[dict]
-    critic_should_revise: bool
-    critic_feedback: list[dict]
-    reflection_notes: list[str]
-    explanation: dict
-
-    # --- Goal Evaluation ---
-    goal_status: dict[str, dict]  # per sub-goal completion status
-    goal_satisfied: bool
-    evaluation_reasoning: str
-
-    # --- Human Approval (Phase 3) ---
+    # ── Human Approval ──────────────────────────────────────────────────
     approval_required: bool
-    approval_status: str  # pending | approved | rejected
-    approval_reason: str  # reason for rejection (if rejected)
+    approval_status: str                 # pending | approved | rejected | not_needed
+    approval_reason: str                 # free-text rejection reason
 
-    # --- Booking & Payment (Phase 3) ---
-    booking_results: list[dict]
-    payment_results: list[dict]
+    # ── Reflection ──────────────────────────────────────────────────────
+    reflect_decision: str                # needs_more_work | complete
+    reflect_feedback: str                # guidance written back to ReactNode
+    reflect_iteration: int               # how many times reflect has looped back
+    max_reflect_iterations: int          # loop guard (default: 3)
 
-    # --- Meta-reasoning (Phase 3) ---
-    failure_history: list[dict]  # log of all failures and recovery attempts
-    recovery_attempts: int
-    max_recovery_attempts: int  # default 3
+    # ── Critic ──────────────────────────────────────────────────────────
+    critic_gate_decision: str            # skip | critic_required
+    critic_notes: list[str]             # issues / risks found by CriticNode
+    critic_risk_level: str               # low | medium | high
 
-    # --- Tool Memory (Phase 3) ---
-    tool_stats: dict  # current session tool performance
+    # ── Response ────────────────────────────────────────────────────────
+    final_response: str                  # the text shown to the user in chat
+    response_metadata: dict              # reasoning, recommendations, risks, warnings
 
-    # --- Episodic Memory (Phase 3) ---
-    session_summary: dict
+    # ── Memory / Persistence ────────────────────────────────────────────
+    memory_context: dict                 # user preferences (loaded from long-term memory)
+    session_summary: dict                # summary of this session
 
-    # --- Memory ---
-    memory_context: dict  # loaded user preferences
+    # ── Booking Results ─────────────────────────────────────────────────
+    booking_results: list[dict]          # confirmed bookings this session
+    payment_results: list[dict]          # confirmed payments this session
 
-    # --- Meta / Error Tracking ---
-    errors: list[dict]
-    iteration_count: int
-    max_iterations: int
+    # ── Error / Meta ────────────────────────────────────────────────────
+    errors: list[dict]                   # error log
+    iteration_count: int                 # total graph node executions

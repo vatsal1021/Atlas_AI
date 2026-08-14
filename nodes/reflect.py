@@ -1,8 +1,14 @@
-"""CriticNode — Challenges the plan/response for conflicts, risks, and logical errors.
+"""ReflectNode — Evaluates whether the ReAct work is sufficient.
 
-Only runs when CriticGate says critic_required.
-Does NOT trigger replanning — writes critic_notes so RelevantResponseNode
-can enrich its response with warnings and trade-offs.
+Checks:
+  1. Objective satisfied?
+  2. Constraints satisfied?
+  3. Tool results valid and non-contradictory?
+  4. Enough information for a high-quality response?
+  5. Zero-tool plans — can we still answer well?
+
+Outputs reflect_decision: needs_more_work | complete
+If needs_more_work, writes reflect_feedback so ReactNode can adjust.
 """
 
 from __future__ import annotations
@@ -21,21 +27,25 @@ from app.tracing import get_tracker
 logger = logging.getLogger(__name__)
 
 
-def critic(state: TripState) -> dict[str, Any]:
-    """Challenge the plan and produce critic_notes for the response generator."""
+def reflect(state: TripState) -> dict[str, Any]:
+    """Evaluate completeness of the ReAct work and decide next step."""
     tracker = get_tracker()
 
     directive = state.get("planning_directive", {})
     extracted = state.get("extracted_entities", {})
     observations = state.get("tool_observations", [])
     reasoning_log = state.get("react_reasoning_log", [])
+    reflect_iter = state.get("reflect_iteration", 0)
+    user_input = state.get("user_input", "")
 
-    system_prompt, user_template = load_prompt("critic")
+    system_prompt, user_template = load_prompt("reflect")
     user_content = user_template.format(
+        user_input=user_input,
         planning_directive=json.dumps(directive, indent=2) if directive else "None",
         extracted_entities=json.dumps(extracted, indent=2),
         tool_observations=_format_observations(observations),
         react_reasoning_log="\n".join(reasoning_log[-5:]) if reasoning_log else "None",
+        reflect_iteration=reflect_iter,
     )
 
     llm = get_llm()
@@ -46,30 +56,30 @@ def critic(state: TripState) -> dict[str, Any]:
 
     result = _extract_json(str(response.content))  # type: ignore[union-attr]
 
-    notes: list[str] = result.get("notes", result.get("issues", []))
-    risk_level: str = result.get("risk_level", result.get("overall_rating", "low"))
+    decision = result.get("decision", "complete")
+    feedback = result.get("feedback", "")
 
-    # Normalise risk_level
-    if risk_level not in ("low", "medium", "high"):
-        risk_level = "low"
+    if decision not in ("needs_more_work", "complete"):
+        decision = "complete"
 
     logger.info(
-        "critic: notes=%d  risk_level=%s", len(notes), risk_level
+        "reflect [iter=%d]: decision=%s", reflect_iter, decision
     )
     if tracker:
         tracker.log_trace(
-            f"[CriticNode] risk_level={risk_level}  notes={len(notes)}"
+            f"[ReflectNode] iter={reflect_iter + 1}  decision={decision}"
         )
 
     return {
-        "critic_notes": notes,
-        "critic_risk_level": risk_level,
+        "reflect_decision": decision,
+        "reflect_feedback": feedback if decision == "needs_more_work" else "",
+        "reflect_iteration": reflect_iter + 1,
     }
 
 
 def _format_observations(observations: list[dict]) -> str:
     if not observations:
-        return "No tool results."
+        return "No tool results (zero-tool plan)."
     lines = []
     for obs in observations:
         tool = obs.get("tool", "?")
@@ -96,4 +106,4 @@ def _extract_json(text: str) -> dict:
                 return json.loads(cleaned[start:end])
             except json.JSONDecodeError:
                 pass
-    return {"notes": [], "risk_level": "low"}
+    return {"decision": "complete", "feedback": ""}

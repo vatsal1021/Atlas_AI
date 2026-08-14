@@ -1,40 +1,65 @@
 import streamlit as st
 
-def render_plan_view(state):
-    """Visualizes sub-goals, world facts, and collected evidence."""
+
+def render_plan_view(state: dict | None):
+    """Visualise planning directive, tool observations, and ReAct reasoning log."""
     if not state:
         return
-        
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### Sub-Goals")
-        sub_goals = state.get("sub_goals", [])
-        if not sub_goals:
-            st.info("No sub-goals generated yet.")
-        for sg in sub_goals:
-            status = sg.get("status", "pending")
-            icon = "⏳"
-            if status == "completed": icon = "✅"
-            elif status == "failed": icon = "❌"
-            elif status == "in_progress": icon = "🔄"
-            
-            st.markdown(f"{icon} **{sg.get('category', '').title()}**: {sg.get('description', '')}")
 
-    with col2:
-        st.markdown("### World Facts")
-        facts = state.get("world_facts", [])
-        if not facts:
-            st.info("No facts derived yet.")
-        for fact in facts:
-            confidence = fact.get("confidence", 0)
-            st.caption(f"[{confidence:.0%} confidence]")
-            st.write(f"- {fact.get('statement')}")
-            
-    st.divider()
-    st.markdown("### Raw Evidence Collected")
-    evidence = state.get("evidence", {})
-    if not evidence:
-        st.info("No evidence collected yet.")
+    # ── Planning Directive ────────────────────────────────────────────────
+    directive = state.get("planning_directive") or {}
+    if directive:
+        st.markdown("### 🎯 Planning Directive")
+        if directive.get("objective"):
+            st.info(f"**Objective:** {directive['objective']}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            decisions = directive.get("required_decisions", [])
+            if decisions:
+                st.markdown("**Decisions to make:**")
+                for d in decisions:
+                    st.markdown(f"- {d}")
+        with col2:
+            criteria = directive.get("success_criteria", [])
+            if criteria:
+                st.markdown("**Success criteria:**")
+                for c in criteria:
+                    st.markdown(f"- ✅ {c}")
+
+        constraints = directive.get("constraints", [])
+        if constraints:
+            st.markdown("**Constraints:**")
+            for c in constraints:
+                st.markdown(f"- ⚠️ {c}")
+
+        st.divider()
+
+    # ── Tool Observations ─────────────────────────────────────────────────
+    observations = state.get("tool_observations", [])
+    st.markdown("### 🔧 Tool Results")
+    if not observations:
+        st.info("No tools have been called yet for this request.")
     else:
-        st.json(evidence)
+        for obs in observations:
+            tool = obs.get("tool", "unknown")
+            status = obs.get("status", "unknown")
+            icon = "✅" if status == "success" else "❌"
+            with st.expander(f"{icon} `{tool}` — {status.upper()}"):
+                if obs.get("arguments"):
+                    st.caption("Arguments:")
+                    st.json(obs["arguments"])
+                if obs.get("result"):
+                    st.caption("Result:")
+                    st.json(obs["result"])
+                if obs.get("error"):
+                    st.error(obs["error"])
+
+    st.divider()
+
+    # ── ReAct Reasoning Log ───────────────────────────────────────────────
+    reasoning_log = state.get("react_reasoning_log", [])
+    if reasoning_log:
+        st.markdown("### 🧠 ReAct Reasoning Steps")
+        for idx, step in enumerate(reasoning_log):
+            st.markdown(f"**Step {idx + 1}:** {step}")

@@ -1,6 +1,7 @@
-"""LangGraph StateGraph definition and compilation.
+"""LangGraph StateGraph definition and compilation — new architecture.
 
-Defines the planning loop and registers instrumented nodes and routers.
+Single-pass, intent-driven, ReAct-centred graph with 13 nodes.
+Preserves MemorySaver checkpointing and the full tracing/observability system.
 """
 
 from __future__ import annotations
@@ -12,56 +13,56 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from graph.state import TripState
-from graph import edges
+from graph.edges import (
+    INTENT_NODE,
+    IRRELEVANT_RESPONSE,
+    ENTITY_EXTRACT,
+    NEGOTIATION_CLASSIFY,
+    NEGOTIATION_QUESTION,
+    PLAN_PROPOSAL,
+    REACT,
+    TOOL_EXECUTION,
+    HUMAN_APPROVAL,
+    REFLECT,
+    CRITIC_GATE,
+    CRITIC,
+    RELEVANT_RESPONSE,
+)
+from graph.router import (
+    route_after_intent_relevance,
+    route_after_negotiation_classify,
+    route_after_intent_path,
+    route_after_react,
+    route_after_approval,
+    route_after_reflect,
+    route_after_critic_gate,
+)
 from app.tracing import get_tracker
 
 # Node functions
-from nodes.goal_understanding import goal_understanding
-from nodes.goal_decomposition import goal_decomposition
-from nodes.objective_planner import objective_planner
-from nodes.capability_dispatcher import capability_dispatcher
-from nodes.evidence_aggregator import evidence_aggregator
-from nodes.world_model import world_model
-from nodes.goal_evaluator import goal_evaluator
-from nodes.reflection import reflection
-from nodes.critic import critic
-from nodes.explainability import explainability
+from nodes.intent_node import intent_node
+from nodes.irrelevant_response import irrelevant_response
+from nodes.entity_extract import entity_extract
+from nodes.negotiation_classification import negotiation_classification
+from nodes.negotiation_question import negotiation_question
+from nodes.plan_proposal import plan_proposal
+from nodes.react import react
+from nodes.tool_execution import tool_execution
 from nodes.human_approval import human_approval
-from nodes.action_dispatcher import action_dispatcher
-from nodes.meta_reasoner import meta_reasoner
-from nodes.memory_update import memory_update
-
-from graph.router import (
-    route_after_evaluator,
-    route_after_reflection,
-    route_after_critic,
-    route_after_explainability,
-    route_after_approval,
-    route_after_action_dispatcher,
-    route_after_meta_reasoning,
-)
-from graph.edges import (
-    GOAL_UNDERSTANDING,
-    GOAL_DECOMPOSITION,
-    OBJECTIVE_PLANNER,
-    CAPABILITY_DISPATCHER,
-    EVIDENCE_AGGREGATOR,
-    WORLD_MODEL,
-    GOAL_EVALUATOR,
-    REFLECTION,
-    CRITIC,
-    EXPLAINABILITY,
-    HUMAN_APPROVAL,
-    ACTION_DISPATCHER,
-    META_REASONER,
-    MEMORY_UPDATE,
-)
+from nodes.reflect import reflect
+from nodes.critic_gate import critic_gate
+from nodes.critic import critic
+from nodes.relevant_response import relevant_response
 
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Instrumentation wrappers (preserves existing tracing system)
+# ---------------------------------------------------------------------------
+
 def _instrument_node(name: str, fn: Callable[[TripState], dict]) -> Callable[[TripState], dict]:
-    """Wrap a node function to automatically log execution start, end, and state changes."""
+    """Wrap a node function to log execution start, end, and state changes."""
     def wrapped(state: TripState) -> dict:
         tracker = get_tracker()
         if tracker:
@@ -79,7 +80,7 @@ def _instrument_node(name: str, fn: Callable[[TripState], dict]) -> Callable[[Tr
 
 
 def _instrument_router(from_node: str, router_fn: Callable[[TripState], str]) -> Callable[[TripState], str]:
-    """Wrap a conditional router function to automatically log routing decisions."""
+    """Wrap a conditional router function to log routing decisions."""
     def wrapped(state: TripState) -> str:
         target = router_fn(state)
         tracker = get_tracker()
@@ -89,147 +90,149 @@ def _instrument_router(from_node: str, router_fn: Callable[[TripState], str]) ->
     return wrapped
 
 
+# ---------------------------------------------------------------------------
+# Helper: set intent_gate_mode = "path" before re-entering IntentNode
+# ---------------------------------------------------------------------------
+
+def _set_path_gate_mode(state: TripState) -> dict:
+    """Thin node that flips intent_gate_mode so IntentNode acts as path gate."""
+    return {"intent_gate_mode": "path"}
+
+
+# ---------------------------------------------------------------------------
+# Graph construction
+# ---------------------------------------------------------------------------
+
 def build_graph() -> StateGraph:
     """Construct and return the (uncompiled) StateGraph."""
     builder = StateGraph(TripState)
 
-    # --- Register instrumented nodes ---
-    builder.add_node(GOAL_UNDERSTANDING, _instrument_node(GOAL_UNDERSTANDING, goal_understanding))
-    builder.add_node(GOAL_DECOMPOSITION, _instrument_node(GOAL_DECOMPOSITION, goal_decomposition))
-    builder.add_node(OBJECTIVE_PLANNER, _instrument_node(OBJECTIVE_PLANNER, objective_planner))
-    builder.add_node(CAPABILITY_DISPATCHER, _instrument_node(CAPABILITY_DISPATCHER, capability_dispatcher))
-    builder.add_node(EVIDENCE_AGGREGATOR, _instrument_node(EVIDENCE_AGGREGATOR, evidence_aggregator))
-    builder.add_node(WORLD_MODEL, _instrument_node(WORLD_MODEL, world_model))
-    builder.add_node(GOAL_EVALUATOR, _instrument_node(GOAL_EVALUATOR, goal_evaluator))
-    
-    # QA Layer (Phase 2)
-    builder.add_node(REFLECTION, _instrument_node(REFLECTION, reflection))
-    builder.add_node(CRITIC, _instrument_node(CRITIC, critic))
-    builder.add_node(EXPLAINABILITY, _instrument_node(EXPLAINABILITY, explainability))
-    
-    # Phase 3 Nodes
-    builder.add_node(HUMAN_APPROVAL, _instrument_node(HUMAN_APPROVAL, human_approval))
-    builder.add_node(ACTION_DISPATCHER, _instrument_node(ACTION_DISPATCHER, action_dispatcher))
-    builder.add_node(META_REASONER, _instrument_node(META_REASONER, meta_reasoner))
-    builder.add_node(MEMORY_UPDATE, _instrument_node(MEMORY_UPDATE, memory_update))
+    # ── Register instrumented nodes ──────────────────────────────────────
+    builder.add_node(INTENT_NODE,          _instrument_node(INTENT_NODE,          intent_node))
+    builder.add_node(IRRELEVANT_RESPONSE,  _instrument_node(IRRELEVANT_RESPONSE,  irrelevant_response))
+    builder.add_node(ENTITY_EXTRACT,       _instrument_node(ENTITY_EXTRACT,       entity_extract))
+    builder.add_node(NEGOTIATION_CLASSIFY, _instrument_node(NEGOTIATION_CLASSIFY, negotiation_classification))
+    builder.add_node(NEGOTIATION_QUESTION, _instrument_node(NEGOTIATION_QUESTION, negotiation_question))
 
-    # --- Control Flow ---
-    builder.set_entry_point(GOAL_UNDERSTANDING)
-    builder.add_edge(GOAL_UNDERSTANDING, GOAL_DECOMPOSITION)
-    builder.add_edge(GOAL_DECOMPOSITION, OBJECTIVE_PLANNER)
+    # Path gate mode setter — thin node, no LLM call
+    PATH_GATE_SETTER = "path_gate_setter"
+    builder.add_node(PATH_GATE_SETTER, _instrument_node(PATH_GATE_SETTER, _set_path_gate_mode))
 
-    # Planning loop
-    builder.add_edge(OBJECTIVE_PLANNER, CAPABILITY_DISPATCHER)
-    builder.add_edge(EVIDENCE_AGGREGATOR, WORLD_MODEL)
-    builder.add_edge(WORLD_MODEL, GOAL_EVALUATOR)
+    builder.add_node(PLAN_PROPOSAL,       _instrument_node(PLAN_PROPOSAL,       plan_proposal))
+    builder.add_node(REACT,               _instrument_node(REACT,               react))
+    builder.add_node(TOOL_EXECUTION,      _instrument_node(TOOL_EXECUTION,      tool_execution))
+    builder.add_node(HUMAN_APPROVAL,      _instrument_node(HUMAN_APPROVAL,      human_approval))
+    builder.add_node(REFLECT,             _instrument_node(REFLECT,             reflect))
+    builder.add_node(CRITIC_GATE,         _instrument_node(CRITIC_GATE,         critic_gate))
+    builder.add_node(CRITIC,              _instrument_node(CRITIC,              critic))
+    builder.add_node(RELEVANT_RESPONSE,   _instrument_node(RELEVANT_RESPONSE,   relevant_response))
 
-    # Evaluator conditional routing
+    # ── Entry point ──────────────────────────────────────────────────────
+    builder.set_entry_point(INTENT_NODE)
+
+    # ── IntentNode (Relevance Gate) → conditional ────────────────────────
     builder.add_conditional_edges(
-        GOAL_EVALUATOR,
-        _instrument_router(GOAL_EVALUATOR, route_after_evaluator),
+        INTENT_NODE,
+        _instrument_router(INTENT_NODE, _route_intent_by_mode),
         {
-            OBJECTIVE_PLANNER: OBJECTIVE_PLANNER,
-            REFLECTION: REFLECTION,
-            CRITIC: CRITIC,
-            EXPLAINABILITY: EXPLAINABILITY,
-            HUMAN_APPROVAL: HUMAN_APPROVAL,
-            MEMORY_UPDATE: MEMORY_UPDATE,
+            ENTITY_EXTRACT:       ENTITY_EXTRACT,
+            IRRELEVANT_RESPONSE:  IRRELEVANT_RESPONSE,
+            PLAN_PROPOSAL:        PLAN_PROPOSAL,
+            REACT:                REACT,
         },
     )
-    
-    # Reflection conditional routing
+
+    # ── Terminal: IrrelevantResponseNode ─────────────────────────────────
+    builder.add_edge(IRRELEVANT_RESPONSE, END)
+
+    # ── EntityExtract → NegotiationClassify (fixed) ──────────────────────
+    builder.add_edge(ENTITY_EXTRACT, NEGOTIATION_CLASSIFY)
+
+    # ── NegotiationClassify → conditional ────────────────────────────────
     builder.add_conditional_edges(
-        REFLECTION,
-        _instrument_router(REFLECTION, route_after_reflection),
+        NEGOTIATION_CLASSIFY,
+        _instrument_router(NEGOTIATION_CLASSIFY, route_after_negotiation_classify),
         {
-            OBJECTIVE_PLANNER: OBJECTIVE_PLANNER,
-            CRITIC: CRITIC,
-            EXPLAINABILITY: EXPLAINABILITY,
-            HUMAN_APPROVAL: HUMAN_APPROVAL,
-            MEMORY_UPDATE: MEMORY_UPDATE,
+            NEGOTIATION_QUESTION: NEGOTIATION_QUESTION,
+            INTENT_NODE:          PATH_GATE_SETTER,   # go via setter first
         },
     )
-    
-    # Critic conditional routing
+
+    # ── Terminal: NegotiationQuestionNode ────────────────────────────────
+    builder.add_edge(NEGOTIATION_QUESTION, END)
+
+    # ── PathGateSetter → IntentNode (now in path mode) ───────────────────
+    builder.add_edge(PATH_GATE_SETTER, INTENT_NODE)
+
+    # ── PlanProposal → React (fixed) ─────────────────────────────────────
+    builder.add_edge(PLAN_PROPOSAL, REACT)
+
+    # ── ReactNode → conditional ──────────────────────────────────────────
     builder.add_conditional_edges(
-        CRITIC,
-        _instrument_router(CRITIC, route_after_critic),
+        REACT,
+        _instrument_router(REACT, route_after_react),
         {
-            OBJECTIVE_PLANNER: OBJECTIVE_PLANNER,
-            EXPLAINABILITY: EXPLAINABILITY,
+            TOOL_EXECUTION: TOOL_EXECUTION,
             HUMAN_APPROVAL: HUMAN_APPROVAL,
-            MEMORY_UPDATE: MEMORY_UPDATE,
+            REFLECT:        REFLECT,
         },
     )
-    
-    # Explainability conditional routing
-    builder.add_conditional_edges(
-        EXPLAINABILITY,
-        _instrument_router(EXPLAINABILITY, route_after_explainability),
-        {
-            HUMAN_APPROVAL: HUMAN_APPROVAL,
-            MEMORY_UPDATE: MEMORY_UPDATE,
-        },
-    )
-    
-    # Human Approval conditional routing
+
+    # ── ToolExecution → React (fixed loop back) ──────────────────────────
+    builder.add_edge(TOOL_EXECUTION, REACT)
+
+    # ── HumanApproval → conditional ──────────────────────────────────────
     builder.add_conditional_edges(
         HUMAN_APPROVAL,
         _instrument_router(HUMAN_APPROVAL, route_after_approval),
         {
-            ACTION_DISPATCHER: ACTION_DISPATCHER,
-            META_REASONER: META_REASONER,
+            TOOL_EXECUTION: TOOL_EXECUTION,
+            REACT:          REACT,
         },
     )
-    
-    # Action Dispatcher conditional routing
-    builder.add_conditional_edges(
-        ACTION_DISPATCHER,
-        _instrument_router(ACTION_DISPATCHER, route_after_action_dispatcher),
-        {
-            MEMORY_UPDATE: MEMORY_UPDATE,
-            META_REASONER: META_REASONER,
-        },
-    )
-    
-    # Capability Dispatcher error edge
-    def route_after_capability(state: TripState) -> str:
-        if state.get("errors"):
-            return META_REASONER
-        return EVIDENCE_AGGREGATOR
 
+    # ── ReflectNode → conditional ────────────────────────────────────────
     builder.add_conditional_edges(
-        CAPABILITY_DISPATCHER,
-        _instrument_router(CAPABILITY_DISPATCHER, route_after_capability),
+        REFLECT,
+        _instrument_router(REFLECT, route_after_reflect),
         {
-            META_REASONER: META_REASONER,
-            EVIDENCE_AGGREGATOR: EVIDENCE_AGGREGATOR,
+            REACT:       REACT,
+            CRITIC_GATE: CRITIC_GATE,
         },
     )
-    
-    # Meta Reasoner conditional routing
-    builder.add_conditional_edges(
-        META_REASONER,
-        _instrument_router(META_REASONER, route_after_meta_reasoning),
-        {
-            CAPABILITY_DISPATCHER: CAPABILITY_DISPATCHER,
-            OBJECTIVE_PLANNER: OBJECTIVE_PLANNER,
-            GOAL_DECOMPOSITION: GOAL_DECOMPOSITION,
-            END: END,
-        },
-    )
-    
-    # Memory update goes to END
-    builder.add_edge(MEMORY_UPDATE, END)
 
-    logger.info("Graph built with instrumented nodes and routers")
+    # ── CriticGate → conditional ─────────────────────────────────────────
+    builder.add_conditional_edges(
+        CRITIC_GATE,
+        _instrument_router(CRITIC_GATE, route_after_critic_gate),
+        {
+            CRITIC:            CRITIC,
+            RELEVANT_RESPONSE: RELEVANT_RESPONSE,
+        },
+    )
+
+    # ── CriticNode → RelevantResponse (fixed) ────────────────────────────
+    builder.add_edge(CRITIC, RELEVANT_RESPONSE)
+
+    # ── Terminal: RelevantResponseNode ───────────────────────────────────
+    builder.add_edge(RELEVANT_RESPONSE, END)
+
+    logger.info("Graph built: 13 nodes, single-pass ReAct architecture")
     return builder
 
 
+def _route_intent_by_mode(state: TripState) -> str:
+    """Unified router for IntentNode — delegates based on current gate mode."""
+    mode = state.get("intent_gate_mode", "relevance")
+    if mode == "path":
+        return route_after_intent_path(state)
+    return route_after_intent_relevance(state)
+
+
 def compile_graph():
-    """Build and compile the graph, ready for invocation."""
+    """Build and compile the graph with MemorySaver checkpointer."""
     builder = build_graph()
     memory = MemorySaver()
-    compiled = builder.compile(checkpointer=memory)
+    compiled = builder.compile(checkpointer=memory, interrupt_before=[HUMAN_APPROVAL])
     logger.info("Graph compiled successfully with MemorySaver checkpointer")
     return compiled
