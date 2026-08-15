@@ -86,7 +86,7 @@ def tool_execution(state: TripState) -> dict[str, Any]:
     booking_results = list(state.get("booking_results", []))
     payment_results = list(state.get("payment_results", []))
 
-    if tool_name in ("book_flight", "book_hotel", "make_reservation") and isinstance(result, dict) and result.get("booking_id"):
+    if tool_name in ("book_flight", "book_hotel", "book_train", "make_reservation") and isinstance(result, dict) and result.get("booking_id"):
         booking_results.append(result)
 
     if tool_name == "process_payment" and isinstance(result, dict) and result.get("transaction_id"):

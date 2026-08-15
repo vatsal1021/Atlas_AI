@@ -11,13 +11,14 @@ system_prompt: |
     complete       - same as respond; use this when you have exhausted tool options
 
   Available tools (from TOOL_REGISTRY):
-    search_flights, search_hotels, get_weather, optimize_route,
+    search_flights, search_hotels, search_trains, get_weather, optimize_route,
     generate_alternatives, check_constraints, load_preferences,
-    book_flight, book_hotel, make_reservation, process_payment, cancel_booking
+    book_flight, book_hotel, book_train, make_reservation, process_payment, cancel_booking
 
   Rules:
   - Choose ONE action per invocation.
   - If you choose act or critical_action, specify the tool and its arguments.
+  - If the user explicitly requests to BOOK a flight, hotel, or train, you MUST select decision "critical_action" with the appropriate tool (book_flight, book_hotel, book_train). Do NOT respond without calling the booking tool.
   - Tool order is FULLY DYNAMIC - base it on what the objective requires and what has already been tried.
   - Do NOT hardcode a fixed sequence (e.g., always flights -> hotels -> weather).
   - If a tool failed in tool_observations, do NOT retry it with the same arguments - try a different approach or decide to respond.

@@ -7,6 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
+from langgraph.types import Command
 
 from app.config import configure_logging, get_settings
 from graph.graph import compile_graph
@@ -20,6 +21,25 @@ from ui.components.approval_card import render_approval_card
 from ui.components.sidebar import render_sidebar
 
 configure_logging()
+
+_AFFIRMATIVE_TERMS = {
+    "yes", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "go ahead",
+    "proceed", "do it", "confirm", "approve", "book it", "book", "fine",
+    "agree", "move ahead", "finalize", "please book", "go for it",
+}
+
+_NEGATIVE_TERMS = {
+    "no", "nope", "dont", "don't", "cancel", "stop", "reject", "decline",
+    "nevermind", "never mind", "abort",
+}
+
+
+def _check_approval_intent(text: str) -> tuple[bool, bool]:
+    """Classify natural language text for approval or rejection intent."""
+    clean = text.lower().strip()
+    is_yes = any(term in clean for term in _AFFIRMATIVE_TERMS)
+    is_no = any(term in clean for term in _NEGATIVE_TERMS)
+    return is_yes, is_no
 
 
 # ── Helpers (must be defined before use in module-level code) ─────────────────
@@ -48,6 +68,7 @@ def _node_label(node_name: str) -> str:
 def _already_shown(messages: list[dict], content: str) -> bool:
     """Check if a message is already in the chat history."""
     return any(m.get("content") == content for m in messages)
+
 
 # ── Session State Init ────────────────────────────────────────────────────────
 if "thread_id" not in st.session_state:
@@ -78,8 +99,21 @@ with col_chat:
 
     if prompt:
         st.session_state.messages.append({"role": "user", "content": prompt})
-        st.session_state.trip_state = None
-        st.session_state.resume_command = None
+
+        # Check if the graph is currently in an interrupted state awaiting approval
+        active_checkpoint = st.session_state.graph.get_state(config)
+        if active_checkpoint and active_checkpoint.next:
+            is_yes, is_no = _check_approval_intent(prompt)
+            if is_yes and not is_no:
+                st.session_state.resume_command = Command(resume={"approved": True, "reason": prompt})
+            elif is_no:
+                st.session_state.resume_command = Command(resume={"approved": False, "reason": prompt})
+            else:
+                st.session_state.resume_command = Command(resume={"approved": False, "reason": f"User input: {prompt}"})
+        else:
+            st.session_state.trip_state = None
+            st.session_state.resume_command = None
+
         st.rerun()
 
 # ── Graph Execution Logic ─────────────────────────────────────────────────────
@@ -89,15 +123,17 @@ user_request = ""
 
 last_msg = st.session_state.messages[-1] if st.session_state.messages else None
 
-if last_msg and last_msg["role"] == "user" and not st.session_state.trip_state:
-    should_run_graph = True
-    user_request = last_msg["content"]
-    initial_state = create_initial_state(user_request)
-
-elif st.session_state.resume_command is not None:
+if st.session_state.resume_command is not None:
     should_run_graph = True
     initial_state = st.session_state.resume_command  # Command object for resume
     st.session_state.resume_command = None
+
+elif last_msg and last_msg["role"] == "user" and not st.session_state.trip_state:
+    should_run_graph = True
+    user_request = last_msg["content"]
+    existing_checkpoint = st.session_state.graph.get_state(config)
+    existing_values = existing_checkpoint.values if existing_checkpoint else None
+    initial_state = create_initial_state(user_request, existing_state=existing_values)
 
 if should_run_graph:
     with col_chat:
@@ -176,12 +212,3 @@ with col_plan:
             if bookings or payments:
                 st.divider()
                 st.subheader("Confirmed Bookings")
-                for b in bookings:
-                    st.success(f"✅ {b.get('type', 'Booking').title()} Confirmed: {b.get('booking_id')}")
-                for p in payments:
-                    st.success(f"💳 Payment Processed: {p.get('transaction_id')} ({p.get('amount')} {p.get('currency')})")
-    else:
-        st.info("Start a conversation to see your travel plan here.")
-
-
-

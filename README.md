@@ -163,9 +163,9 @@ class TripState(TypedDict, total=False):
 
 The ReAct loop (`react` ↔ `tool_execution`) handles tool selection dynamically. Supported tools in `TOOL_REGISTRY` (`app/settings.py`):
 
-- **Research:** `search_flights`, `search_hotels`, `get_weather`, `optimize_route`, `generate_alternatives`
+- **Research:** `search_flights`, `search_hotels`, `search_trains`, `get_weather`, `optimize_route`, `generate_alternatives`
 - **Constraints & Memory:** `check_constraints`, `load_preferences`
-- **Booking & Payment (HITL Required):** `book_flight`, `book_hotel`, `make_reservation`, `process_payment`, `cancel_booking`
+- **Booking & Payment (HITL Required):** `book_flight`, `book_hotel`, `book_train`, `make_reservation`, `process_payment`, `cancel_booking`
 
 ---
 
@@ -203,6 +203,7 @@ All node system personas and prompt templates are defined in YAML files under `p
 prompts/
 ├── intent.yaml
 ├── intent_path.yaml
+├── irrelevant.yaml
 ├── entity_extract.yaml
 ├── negotiation_classification.yaml
 ├── negotiation_question.yaml
@@ -213,7 +214,7 @@ prompts/
 └── relevant_response.yaml
 ```
 
-Each YAML isolates static system personas (`system_prompt`) from runtime context templates (`user_prompt`).
+Each YAML isolates static system personas (`system_prompt`) from runtime context templates (`user_prompt`). Prompts including `irrelevant.yaml` incorporate `{conversation_history}` so the LLM retains multi-turn conversational memory (names, past questions, and context).
 
 ---
 

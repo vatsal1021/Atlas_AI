@@ -233,6 +233,6 @@ def compile_graph():
     """Build and compile the graph with MemorySaver checkpointer."""
     builder = build_graph()
     memory = MemorySaver()
-    compiled = builder.compile(checkpointer=memory, interrupt_before=[HUMAN_APPROVAL])
+    compiled = builder.compile(checkpointer=memory)
     logger.info("Graph compiled successfully with MemorySaver checkpointer")
     return compiled

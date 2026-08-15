@@ -22,6 +22,7 @@ ENABLE_MULTI_AGENT: bool = False        # multi-agent collaboration (future)
 IRREVERSIBLE_TOOLS: set[str] = {
     "book_flight",
     "book_hotel",
+    "book_train",
     "make_reservation",
     "process_payment",
     "cancel_booking",
@@ -33,6 +34,7 @@ IRREVERSIBLE_TOOLS: set[str] = {
 CRITIC_TRIGGER_TOOLS: set[str] = {
     "book_flight",
     "book_hotel",
+    "book_train",
     "make_reservation",
     "process_payment",
     "cancel_booking",
@@ -46,6 +48,7 @@ TOOL_REGISTRY: dict[str, str] = {
     # Research
     "search_flights":        "tools.travel_research",
     "search_hotels":         "tools.travel_research",
+    "search_trains":         "tools.travel_research",
     "get_weather":           "tools.weather",
     "optimize_route":        "tools.route_optimizer",
     "generate_alternatives": "tools.alternative_generator",
@@ -55,6 +58,7 @@ TOOL_REGISTRY: dict[str, str] = {
     # Booking & payment
     "book_flight":           "tools.booking",
     "book_hotel":            "tools.booking",
+    "book_train":            "tools.booking",
     "make_reservation":      "tools.reservation",
     "process_payment":       "tools.payment",
     "cancel_booking":        "tools.booking",

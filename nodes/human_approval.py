@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _TOOL_ACTION_TYPE: dict[str, ActionType] = {
     "book_flight":       ActionType.BOOK_FLIGHT,
     "book_hotel":        ActionType.BOOK_HOTEL,
+    "book_train":        ActionType.BOOK_TRAIN,
     "make_reservation":  ActionType.MAKE_RESERVATION,
     "process_payment":   ActionType.PROCESS_PAYMENT,
     "cancel_booking":    ActionType.OTHER,
@@ -44,7 +45,7 @@ def human_approval(state: TripState) -> dict[str, Any]:
         logger.info("human_approval: no pending tool call — skipping.")
         return {
             "approval_required": False,
-            "approval_status": ApprovalStatus.NOT_NEEDED,
+            "approval_status": ApprovalStatus.NOT_NEEDED.value,
         }
 
     # Build single ApprovalAction from the pending_tool_call dict
@@ -129,7 +130,7 @@ def human_approval(state: TripState) -> dict[str, Any]:
             logger.info("human_approval: APPROVED")
             return {
                 "approval_required": True,
-                "approval_status": ApprovalStatus.APPROVED,
+                "approval_status": ApprovalStatus.APPROVED.value,
                 "approval_reason": "",
             }
         else:
@@ -145,7 +146,7 @@ def human_approval(state: TripState) -> dict[str, Any]:
             })
             return {
                 "approval_required": True,
-                "approval_status": ApprovalStatus.REJECTED,
+                "approval_status": ApprovalStatus.REJECTED.value,
                 "approval_reason": decision.reason,
                 "tool_observations": observations,
                 "pending_tool_call": {},

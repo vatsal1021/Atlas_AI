@@ -1,6 +1,8 @@
 """Test case: Book a flight ticket from Lucknow to Delhi on 20 August."""
 import sys
 sys.path.insert(0, ".")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from graph.graph import compile_graph
 from graph.planner_loop import create_initial_state

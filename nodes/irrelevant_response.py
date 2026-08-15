@@ -1,6 +1,7 @@
 """IrrelevantResponseNode — Fast conversational reply for off-topic / empty input.
 
-Generates a short, friendly response without triggering any planning machinery.
+Generates a short, friendly response using conversation_history context
+without triggering any planning machinery.
 Appends the exchange to conversation_history before routing to END.
 """
 
@@ -13,36 +14,34 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from graph.state import TripState
 from services.llm import get_llm
+from services.prompt_loader import load_prompt
 from app.tracing import get_tracker
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = (
-    "You are AtlasAI, a friendly travel-planning assistant. "
-    "The user has sent a message that is not a travel-planning request. "
-    "Reply naturally and conversationally in 1-3 sentences. "
-    "If it is a greeting, greet back warmly. "
-    "If it is an off-topic question, politely explain that you specialise in travel planning "
-    "and invite them to share their travel plans. "
-    "Do NOT attempt to plan any trip or call any tools."
-)
-
 
 def irrelevant_response(state: TripState) -> dict[str, Any]:
-    """Generate a natural conversational reply for non-travel input."""
+    """Generate a natural conversational reply for non-travel input using history."""
     user_input = state.get("user_input", "")
     classification = state.get("intent_classification", "irrelevant")
+    history = state.get("conversation_history", [])
     tracker = get_tracker()
 
     logger.info(
-        "irrelevant_response: classification=%s  input_len=%d",
-        classification, len(user_input),
+        "irrelevant_response: classification=%s  input_len=%d  history_turns=%d",
+        classification, len(user_input), len(history),
+    )
+
+    system_prompt, user_template = load_prompt("irrelevant")
+    user_content = user_template.format(
+        user_input=user_input or "(empty message)",
+        conversation_history=_format_history(history),
     )
 
     llm = get_llm(temperature=0.7)
     response = llm.invoke([
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(content=user_input or "(empty message)"),
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_content),
     ])
 
     reply = response.content.strip()  # type: ignore[union-attr]
@@ -50,13 +49,25 @@ def irrelevant_response(state: TripState) -> dict[str, Any]:
     if tracker:
         tracker.log_trace(f"[IrrelevantResponseNode] Replied to non-travel input")
 
-    # Append to conversation_history
-    history = list(state.get("conversation_history", []))
+    # Append exchange to conversation_history
+    updated_history = list(history)
     if user_input:
-        history.append({"role": "user", "content": user_input})
-    history.append({"role": "assistant", "content": reply})
+        updated_history.append({"role": "user", "content": user_input})
+    updated_history.append({"role": "assistant", "content": reply})
 
     return {
         "final_response": reply,
-        "conversation_history": history,
+        "conversation_history": updated_history,
     }
+
+
+def _format_history(history: list[dict]) -> str:
+    """Format recent conversation history into a readable string for the prompt."""
+    if not history:
+        return "No prior conversation history."
+    lines = []
+    for msg in history[-10:]:   # Include up to last 10 messages (5 turns)
+        role = msg.get("role", "user").upper()
+        content = msg.get("content", "")
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)

@@ -31,6 +31,7 @@ class ActionType(str, Enum):
 
     BOOK_FLIGHT = "book_flight"
     BOOK_HOTEL = "book_hotel"
+    BOOK_TRAIN = "book_train"
     MAKE_RESERVATION = "make_reservation"
     PROCESS_PAYMENT = "process_payment"
     OTHER = "other"

@@ -75,3 +75,33 @@ def book_hotel(**kwargs: Any) -> dict[str, Any]:
         is_stub=True,
     )
     return confirmation.model_dump()
+
+
+def book_train(**kwargs: Any) -> dict[str, Any]:
+    """Book a train ticket (stub).
+
+    Parameters
+    ----------
+    **kwargs
+        Train option details (train_name, train_number, origin, destination, date, travel_class, price, etc.)
+
+    Returns
+    -------
+    dict
+        A BookingConfirmation serialised as a dict.
+    """
+    logger.warning("book_train: STUB — no real booking is being made.")
+
+    seed = str(sorted(kwargs.items()))
+    booking_id = "TRN-" + hashlib.md5(seed.encode()).hexdigest()[:8].upper()
+
+    confirmation = BookingConfirmation(
+        booking_id=booking_id,
+        type="train",
+        status="confirmed",
+        details=kwargs,
+        cancellation_policy="Free cancellation up to 4 hours before scheduled departure.",
+        booked_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        is_stub=True,
+    )
+    return confirmation.model_dump()

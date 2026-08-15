@@ -133,3 +133,70 @@ def search_hotels(
         results.append(hotel.model_dump())
 
     return results
+
+
+_TRAIN_NAMES = [
+    ("Vande Bharat Express", "22435"),
+    ("Shatabdi Express", "12004"),
+    ("Rajdhani Express", "12423"),
+    ("Tejas Express", "82501"),
+    ("Garib Rath Express", "12204"),
+    ("Intercity Express", "14210"),
+]
+
+
+def search_trains(
+    origin: str = "Kanpur",
+    destination: str = "Delhi",
+    date: str = "",
+    passengers: int = 1,
+    **kwargs,
+) -> list[dict]:
+    """Return mock train options."""
+    destination = destination or kwargs.get("location") or kwargs.get("to") or "Delhi"
+    origin = origin or kwargs.get("from") or "Kanpur"
+    date = date or kwargs.get("departure_date") or kwargs.get("start_date") or datetime.now().strftime("%Y-%m-%d")
+    passengers = passengers or kwargs.get("guests") or kwargs.get("travelers") or 1
+
+    logger.info(
+        "search_trains  origin=%s  dest=%s  date=%s  pax=%s",
+        origin, destination, date, passengers,
+    )
+    rng = random.Random(f"{origin}-{destination}-{date}-train")
+    num_options = rng.randint(3, 5)
+    results: list[dict] = []
+
+    for i in range(num_options):
+        train_name, train_number = rng.choice(_TRAIN_NAMES)
+        travel_class = rng.choice(["CC", "EC", "3A", "2A", "1A"])
+        price = rng.randint(450, 2400) * passengers
+        duration = round(rng.uniform(4.0, 8.5), 1)
+
+        try:
+            dep = datetime.fromisoformat(date).replace(
+                hour=rng.randint(6, 21), minute=rng.choice([0, 15, 30, 45])
+            )
+        except ValueError:
+            dep = datetime.now().replace(
+                hour=rng.randint(6, 21), minute=rng.choice([0, 15, 30, 45])
+            )
+
+        arr = dep + timedelta(hours=duration)
+
+        train_info = {
+            "train_name": train_name,
+            "train_number": train_number,
+            "origin": origin,
+            "destination": destination,
+            "departure_time": dep.isoformat(),
+            "arrival_time": arr.isoformat(),
+            "duration_hours": duration,
+            "travel_class": travel_class,
+            "price": price,
+            "currency": "INR",
+            "seats_available": rng.randint(12, 140),
+            "status": "available",
+        }
+        results.append(train_info)
+
+    return results
