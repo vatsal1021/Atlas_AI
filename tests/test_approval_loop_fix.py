@@ -37,7 +37,7 @@ graph = compile_graph()
 thread_id = "test_approval_natural_resume"
 config = {"configurable": {"thread_id": thread_id}}
 
-user_prompt = "book the train ticket from kanpur to delhi on 20 august"
+user_prompt = "book train ticket from kanpur to delhi for Vatsal Mittal, 22, male, lower berth, CC class on 20 august"
 state_input = create_initial_state(user_prompt)
 
 # Stream pass 1 until interrupt

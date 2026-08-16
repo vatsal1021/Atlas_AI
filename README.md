@@ -67,8 +67,12 @@ flowchart TD
     REACT -->|act| TE[tool_execution]
     TE --> REACT
     
+    %% Deterministic Booking Requirements & Capability Gate
+    REACT -->|critical_action / booking| BR[booking_requirements: Validator & Capability Check]
+    BR -->|booking_ready = True| HA[human_approval]
+    BR -->|missing fields / unauthenticated| REACT
+    
     %% Human Approval Path
-    REACT -->|critical_action| HA[human_approval]
     HA -->|approved| TE
     HA -->|rejected| REACT
     
@@ -88,19 +92,20 @@ flowchart TD
 
 ## Graph Node Definitions
 
-The graph consists of 13 focused, single-responsibility nodes:
+The graph consists of 14 focused, single-responsibility nodes:
 
 | Node Name | Component File | Description & Function |
 |---|---|---|
 | **`intent_node`** | `nodes/intent_node.py` | Dual-role gate: (1) Relevance Gate (relevant vs. irrelevant), (2) Path Gate (`plan` directive vs. `direct_execute`). |
 | **`irrelevant_response`** | `nodes/irrelevant_response.py` | Generates friendly, natural conversational replies for non-travel or greeting messages. |
-| **`entity_extract`** | `nodes/entity_extract.py` | Extracts structured travel entities (origin, destination, dates, budget, travelers) and merges with persisted state. |
+| **`entity_extract`** | `nodes/entity_extract.py` | Extracts structured travel entities (origin, destination, dates, budget, travelers, passenger info) and merges with persisted state. |
 | **`negotiation_classification`** | `nodes/negotiation_classification.py` | Evaluates whether sufficient information is present to proceed with planning/execution. |
 | **`negotiation_question`** | `nodes/negotiation_question.py` | Generates a single, contextual follow-up question when critical parameters are missing. |
 | **`plan_proposal`** | `nodes/plan_proposal.py` | Formulates a structured planning directive (objective, constraints, decisions, success criteria). |
 | **`react`** | `nodes/react.py` | ReAct reasoning engine: decides `act`, `critical_action`, `respond`, or `complete`. |
 | **`tool_execution`** | `nodes/tool_execution.py` | Resolves and executes tools from `TOOL_REGISTRY` and updates tool observations and memory. |
-| **`human_approval`** | `nodes/human_approval.py` | Pauses execution via `interrupt()` before executing sensitive financial or booking actions. |
+| **`booking_requirements`** | `nodes/booking_requirements.py` | Deterministically validates field requirements (train, flight, hotel) and verifies API provider capabilities before HITL approval. |
+| **`human_approval`** | `nodes/human_approval.py` | Pauses execution via `interrupt()` before executing sensitive financial or booking actions once `booking_ready == True`. |
 | **`reflect`** | `nodes/reflect.py` | Evaluates whether ReAct output satisfies objective and constraints. |
 | **`critic_gate`** | `nodes/critic_gate.py` | Fast heuristic gate that determines if full Critic review is required. |
 | **`critic`** | `nodes/critic.py` | Audits complex plans for budget conflicts, risk factors, and logical errors. |
@@ -149,10 +154,22 @@ class TripState(TypedDict, total=False):
     critic_notes: list[str]             # Issues identified by Critic
     critic_risk_level: str               # low | medium | high
 
+    # --- Booking Readiness & Capability ---
+    booking_type: str                    # train | flight | hotel
+    booking_details: dict                # Selected train/flight/hotel option details
+    booking_requirements: dict           # Deterministic validation result
+    missing_booking_fields: list[str]    # Missing required passenger/guest fields
+    booking_requirements_complete: bool  # True when all required fields are present
+    booking_capability_available: bool   # True when authenticated provider configured
+    booking_capability_reason: str       # Reason if capability is unavailable
+    booking_ready: bool                  # requirements_complete AND capability_available
+    passenger_info: list[dict]           # Passenger details accumulated across turns
+    guest_info: dict                     # Hotel guest details accumulated across turns
+
     # --- Final Response & Bookings ---
     final_response: str                  # Rendered response shown in UI
     response_metadata: dict              # Metadata (tools used, critic notes, steps)
-    booking_results: list[dict]          # Confirmed flight/hotel booking receipts
+    booking_results: list[dict]          # Confirmed flight/hotel/train booking receipts
     payment_results: list[dict]          # Confirmed payment transaction receipts
     memory_context: dict                 # Loaded user preferences
 ```
@@ -180,18 +197,25 @@ When the user approves or rejects via the UI:
 
 ---
 
-## Observability & Telemetry
-
 AtlasAI's tracing system (`app/tracing.py`) automatically records every run and tool execution in real-time to `runtime/`:
 
 ```
 runtime/
-├── runtime_<run_id>.json                # Full structured event telemetry for the workflow
-├── runtime_<run_id>_tool_<tool_name>.json# Dedicated, real-time JSON log for each tool invoked
-└── trace_<run_id>.log                   # Human-readable step-by-step trace log
+├── search_flights.json           # Dedicated, real-time JSON log for flight search tool
+├── book_flight.json              # Dedicated, real-time JSON log for flight booking tool
+├── search_hotels.json            # Dedicated, real-time JSON log for hotel search tool
+├── book_hotel.json               # Dedicated, real-time JSON log for hotel booking tool
+├── search_trains.json            # Dedicated, real-time JSON log for train search tool
+├── book_train.json               # Dedicated, real-time JSON log for train booking tool
+├── process_payment.json          # Dedicated, real-time JSON log for payment processing tool
+├── send_email_confirmation.json  # Dedicated, real-time JSON log for email notification tool
+├── send_sms_confirmation.json    # Dedicated, real-time JSON log for SMS notification tool
+└── traces/
+    └── trace_<run_id>.log        # Human-readable step-by-step trace log
 ```
 
-- **Per-Tool JSON Files:** Automatically generated and updated whenever a tool (`search_flights`, `book_flight`, `search_hotels`, etc.) is invoked. Tracks `invocation_index`, timestamp, node, parameters, output payloads, latency, and status per tool.
+- **Tool-Specific JSON Files (`runtime/<tool_name>.json`):** Automatically created and updated in real-time whenever a tool is invoked. Stores real-time inputs, results, execution counts, error arrays, and last updated timestamps for each specific tool.
+- **Trace Logs (`runtime/traces/trace_<run_id>.log`):** Captures human-readable execution flow and node transitions under `runtime/traces/`.
 
 ---
 
@@ -262,22 +286,32 @@ Each YAML isolates static system personas (`system_prompt`) from runtime context
 streamlit run ui/streamlit_app.py
 ```
 
-### 2. E2E Test Suite
+### 2. Production Booking Architecture Tests
 ```bash
-python tests/test_graph_e2e.py
+python tests/test_production_booking_arch.py
 ```
 
-### 3. Scenario Tests
+### 3. Observability & Runtime Telemetry Tests
 ```bash
-python tests/test_flight_booking.py
+python tests/test_runtime_architecture.py
+```
+
+### 4. Approval Loop & Memory Verification Tests
+```bash
+python tests/test_approval_loop_fix.py
+python tests/test_memory_conversation.py
 ```
 
 ---
 
 ## Testing
 
-Run unit & integration tests using `pytest`:
+Run unit & integration tests using `pytest` or individual test scripts:
 
 ```bash
+python tests/test_production_booking_arch.py
+python tests/test_runtime_architecture.py
+python tests/test_approval_loop_fix.py
+python tests/test_memory_conversation.py
 pytest tests/ -v
 ```

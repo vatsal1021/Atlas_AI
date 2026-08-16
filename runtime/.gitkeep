@@ -1,5 +1,0 @@
-# This directory holds runtime observability files generated on every execution.
-# Both files are auto-generated per run and are safe to delete.
-#
-# runtime_<run_id>.json  — full structured event log
-# trace_<run_id>.log     — human-readable execution trace

@@ -1,22 +1,12 @@
 """Comprehensive Debugging & Observability System.
 
-Generates two separate files for every execution in the runtime/ directory:
-  1. runtime_<run_id>.json  — Full structured JSON event log
-  2. trace_<run_id>.log     — Human-readable execution log
-
-Usage (from any node, tool, or service):
-
-    from app.tracing import get_tracker
-    tracker = get_tracker()           # None if no active run
-    if tracker:
-        tracker.track_tool_call(...)
-
-Usage (from app entry points):
-
-    from app.tracing import start_execution_tracker
-    tracker = start_execution_tracker(run_id="abc123", user_input="Plan a trip...")
-    ...
-    tracker.track_workflow_complete(success=True)
+Runtime Telemetry & Observability Rules:
+  1. Tool Runtime JSON files MUST be named directly after the tool:
+     runtime/<tool_name>.json (e.g. runtime/flight_booking.json, runtime/payment.json).
+     No run IDs, timestamps, or session IDs in JSON filenames.
+  2. Each tool has ONE persistent JSON file updated in real-time across invocations.
+  3. Missing tool JSON files are created automatically.
+  4. ALL trace logs exist ONLY inside runtime/traces/ (e.g. runtime/traces/trace_<run_id>.log).
 """
 
 from __future__ import annotations
@@ -24,7 +14,6 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import os
 import time
 import uuid
 from contextvars import ContextVar
@@ -47,9 +36,13 @@ _current_tracker: ContextVar[Optional["ExecutionTracker"]] = ContextVar(
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_tracker() -> Optional["ExecutionTracker"]:
-    """Return the active ExecutionTracker, or None if none is set."""
-    return _current_tracker.get()
+def get_tracker() -> ExecutionTracker:
+    """Return the active ExecutionTracker, auto-initializing a default one if none exists."""
+    tracker = _current_tracker.get()
+    if tracker is None:
+        tracker = ExecutionTracker(run_id="active_run", user_input="Execution run")
+        _current_tracker.set(tracker)
+    return tracker
 
 
 def set_tracker(tracker: Optional["ExecutionTracker"]) -> None:
@@ -72,14 +65,11 @@ def start_execution_tracker(
 # ---------------------------------------------------------------------------
 
 class ExecutionTracker:
-    """Manages dual-file observability for one workflow run.
+    """Manages observability and tool-specific telemetry.
 
-    Files written to ``runtime/``:
-      - ``runtime_<run_id>.json``  — structured event log (JSON)
-      - ``trace_<run_id>.log``     — human-readable trace log (text)
-
-    Both files are written atomically on every event so they remain
-    readable even if the process crashes mid-run.
+    Files structure in ``runtime/``:
+      - ``runtime/<tool_name>.json``      — One persistent JSON file per tool name
+      - ``runtime/traces/trace_<id>.log`` — Human-readable trace logs
     """
 
     def __init__(
@@ -90,25 +80,27 @@ class ExecutionTracker:
         self.run_id = run_id or uuid.uuid4().hex[:8]
         self.user_input = user_input or ""
         self.base_dir = Path(__file__).resolve().parent.parent / "runtime"
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.traces_dir = self.base_dir / "traces"
 
-        self.json_file = self.base_dir / f"runtime_{self.run_id}.json"
-        self.log_file  = self.base_dir / f"trace_{self.run_id}.log"
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.traces_dir.mkdir(parents=True, exist_ok=True)
+
+        self.log_file = self.traces_dir / f"trace_{self.run_id}.log"
 
         self.events: List[Dict[str, Any]] = []
         self.start_time: float = time.time()
         self.status: str = "Running"
         self.current_node: Optional[str] = None
 
-        # Wipe existing run files & tool-specific JSON files for this run_id
-        for f in self.base_dir.glob(f"runtime_{self.run_id}*.json"):
+        # Clean up legacy files directly under runtime/ if any exist
+        for legacy_json in self.base_dir.glob("runtime_*.json"):
             try:
-                f.unlink()
+                legacy_json.unlink()
             except Exception:
                 pass
-        if self.log_file.exists():
+        for legacy_log in self.base_dir.glob("*.log"):
             try:
-                self.log_file.unlink()
+                legacy_log.unlink()
             except Exception:
                 pass
 
@@ -124,7 +116,7 @@ class ExecutionTracker:
         self.log_trace(divider)
         self.log_trace("")
 
-        # Seed the JSON with the init event
+        # Seed initial event
         self.record_event(
             event_type="Agent Initialization",
             component="Agent",
@@ -138,7 +130,7 @@ class ExecutionTracker:
         self.log_trace(f"[Workflow] Run {self.run_id} started\n")
 
     # -----------------------------------------------------------------------
-    # Low-level event recorder
+    # Low-level event recorder & trace logger
     # -----------------------------------------------------------------------
 
     def record_event(
@@ -155,7 +147,7 @@ class ExecutionTracker:
         error_details: Optional[Any] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Append a structured event, then flush both files to disk."""
+        """Append a structured event to memory."""
         node = current_workflow_node or self.current_node
         event: Dict[str, Any] = {
             "event_id": f"evt_{len(self.events) + 1:04d}",
@@ -173,11 +165,10 @@ class ExecutionTracker:
             "metadata": _serialize(metadata),
         }
         self.events.append(event)
-        self._flush_json()
         return event
 
     def log_trace(self, text: str) -> None:
-        """Append a line to the human-readable trace log."""
+        """Append a line to the human-readable trace log under runtime/traces/."""
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(text + "\n")
 
@@ -208,7 +199,6 @@ class ExecutionTracker:
         error: Optional[Any] = None,
     ) -> None:
         """Log the completion of a LangGraph node execution."""
-        # Surface any planned tool calls chosen by the planner
         if isinstance(state_update, dict):
             for call in state_update.get("pending_tool_calls", []):
                 tool = call.get("tool", "Unknown")
@@ -235,6 +225,32 @@ class ExecutionTracker:
         else:
             self.log_trace(f"[{_pretty(node_name)}] {status_label}\n")
 
+    def track_tool_start(
+        self,
+        tool_name: str,
+        input_params: Dict[str, Any],
+        node_name: Optional[str] = None,
+    ) -> None:
+        """Log tool execution start in real-time into runtime/<tool_name>.json."""
+        node = node_name or self.current_node
+        self.record_event(
+            event_type="Tool Call",
+            component="Tool",
+            component_name=tool_name,
+            current_workflow_node=node,
+            status="Started",
+            input_payload=input_params,
+            metadata={"node": node},
+        )
+        self._flush_tool_json(
+            tool_name=tool_name,
+            input_params=input_params,
+            output=None,
+            status="started",
+            error=None,
+            node_name=node,
+        )
+
     def track_tool_call(
         self,
         tool_name: str,
@@ -244,30 +260,36 @@ class ExecutionTracker:
         error: Optional[Any] = None,
         node_name: Optional[str] = None,
     ) -> None:
-        """Log a tool invocation with inputs, outputs, and status.
-
-        Also updates the tool-specific JSON file (runtime_<run_id>_tool_<tool_name>.json).
-        """
+        """Log tool invocation completion/failure in runtime/<tool_name>.json."""
         node = node_name or self.current_node
+        event_status = "Success" if status.lower() in ("success", "completed") else "Failed"
         self.record_event(
             event_type="Tool Call",
             component="Tool",
             component_name=tool_name,
             current_workflow_node=node,
-            status=status,
+            status=event_status,
             input_payload=input_params,
             output_response=output,
             error_details=error,
             metadata={"node": node},
         )
-        # Flush dedicated tool JSON file
-        self._flush_tool_json(tool_name, input_params, output, status, error, node)
+
+        # Update dedicated tool JSON file (runtime/<tool_name>.json)
+        self._flush_tool_json(
+            tool_name=tool_name,
+            input_params=input_params,
+            output=output,
+            status=status,
+            error=error,
+            node_name=node,
+        )
 
         # Human-readable trace block
         params_str = json.dumps(input_params, default=str)
         if len(params_str) > 200:
             params_str = params_str[:197] + "..."
-        output_summary = _summarize_tool_output(output) if status == "Success" else f"ERROR: {error}"
+        output_summary = _summarize_tool_output(output) if event_status == "Success" else f"ERROR: {error}"
 
         self.log_trace(f"[Tool] {_pretty(tool_name)}")
         self.log_trace(f"       Input  : {params_str}")
@@ -309,7 +331,7 @@ class ExecutionTracker:
         success: bool = True,
         error: Optional[Any] = None,
     ) -> None:
-        """Record final workflow status and flush both output files."""
+        """Record final workflow status and trace log footer."""
         elapsed = time.time() - self.start_time
         self.status = "Success" if success else "Failed"
 
@@ -333,7 +355,6 @@ class ExecutionTracker:
             if error:
                 self.log_trace(f"           Error: {error}")
 
-        # Summary counts
         tool_events    = [e for e in self.events if e["event_type"] == "Tool Call"]
         node_events    = [e for e in self.events if e["event_type"] == "Node Execution" and e["status"] == "Started"]
         error_events   = [e for e in self.events if e.get("error_details")]
@@ -348,74 +369,12 @@ class ExecutionTracker:
         self.log_trace(f"    Memory ops      : {len(mem_events)}")
         self.log_trace(f"    Errors          : {len(error_events)}")
         self.log_trace(divider)
-        self.log_trace(f"  Runtime JSON : runtime_{self.run_id}.json")
-        self.log_trace(f"  Trace Log    : trace_{self.run_id}.log")
+        self.log_trace(f"  Trace Log : {self.log_file}")
         self.log_trace(divider)
 
-        # Final JSON flush with summary
-        self._flush_json()
-
     # -----------------------------------------------------------------------
-    # Internal helpers
+    # Real-Time Tool-Specific JSON Generator
     # -----------------------------------------------------------------------
-
-    def _flush_json(self) -> None:
-        """Write the full event list and computed summary to disk."""
-        tool_calls = [
-            e["component_name"]
-            for e in self.events
-            if e["event_type"] == "Tool Call"
-        ]
-        nodes_executed = list(dict.fromkeys(  # ordered unique
-            e["component_name"]
-            for e in self.events
-            if e["event_type"] == "Node Execution" and e["status"] == "Started"
-        ))
-        errors = [
-            {
-                "event_id": e["event_id"],
-                "component": e["component_name"],
-                "error": e["error_details"],
-            }
-            for e in self.events
-            if e.get("error_details")
-        ]
-
-        data: Dict[str, Any] = {
-            "run_id": self.run_id,
-            "status": self.status,
-            "user_input": self.user_input,
-            "start_time": datetime.datetime.fromtimestamp(
-                self.start_time, datetime.timezone.utc
-            ).isoformat(),
-            "last_updated": datetime.datetime.now(
-                datetime.timezone.utc
-            ).isoformat(),
-            "output_files": {
-                "runtime_json": str(self.json_file),
-                "trace_log": str(self.log_file),
-            },
-            "summary": {
-                "total_events": len(self.events),
-                "nodes_executed": nodes_executed,
-                "tools_called": tool_calls,
-                "unique_tools": list(dict.fromkeys(tool_calls)),
-                "llm_calls": sum(
-                    1 for e in self.events
-                    if e["event_type"] == "LLM Call" and e["status"] == "Success"
-                ),
-                "memory_ops": sum(
-                    1 for e in self.events
-                    if e["event_type"] == "Memory Operation"
-                ),
-                "errors": errors,
-                "error_count": len(errors),
-            },
-            "events": self.events,
-        }
-
-        with open(self.json_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
 
     def _flush_tool_json(
         self,
@@ -426,47 +385,71 @@ class ExecutionTracker:
         error: Optional[Any],
         node_name: Optional[str],
     ) -> None:
-        """Auto-generate and update a dedicated JSON file for a specific tool in runtime/."""
-        tool_file = self.base_dir / f"runtime_{self.run_id}_tool_{tool_name}.json"
+        """Create/update runtime/<tool_name>.json continuously in real-time."""
+        # Sanitize tool_name to build valid filename directly under runtime/
+        clean_tool_name = tool_name.strip().lower()
+        tool_file = self.base_dir / f"{clean_tool_name}.json"
 
-        # Load existing data if file exists
+        existing_data: Dict[str, Any] = {}
         if tool_file.exists():
             try:
                 with open(tool_file, "r", encoding="utf-8") as f:
-                    tool_data = json.load(f)
+                    existing_data = json.load(f)
             except Exception:
-                tool_data = {}
+                existing_data = {}
+
+        execution_count = existing_data.get("execution_count", 0)
+        errors = existing_data.get("errors", [])
+        if not isinstance(errors, list):
+            errors = []
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        is_started = (status.lower() == "started")
+        is_success = (status.lower() in ("completed", "success"))
+
+        prev_status = existing_data.get("status", "")
+
+        if is_started:
+            execution_count += 1
+            final_status = "started"
+        elif is_success:
+            if prev_status != "started":
+                execution_count += 1
+            final_status = "completed"
         else:
-            tool_data = {}
+            if prev_status != "started":
+                execution_count += 1
+            final_status = "failed"
 
-        invocations = tool_data.get("invocations", [])
-        invocation_entry = {
-            "invocation_index": len(invocations) + 1,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        if error:
+            errors.append({
+                "error": _serialize(error),
+                "timestamp": now_iso,
+                "input": _serialize(input_params),
+            })
+
+        current_call = {
+            "input": _serialize(input_params),
+            "result": _serialize(output),
+            "success": is_success if not is_started else None,
+            "timestamp": now_iso,
             "node": node_name or self.current_node,
-            "status": status,
-            "input_params": _serialize(input_params),
-            "output": _serialize(output),
-            "error": _serialize(error),
         }
-        invocations.append(invocation_entry)
 
-        successful_count = sum(1 for inv in invocations if inv.get("status") == "Success")
-        failed_count = sum(1 for inv in invocations if inv.get("status") != "Success")
+        last_result = _serialize(output) if is_success else existing_data.get("last_result")
 
-        updated_tool_data = {
-            "run_id": self.run_id,
-            "tool_name": tool_name,
-            "user_input": self.user_input,
-            "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "total_invocations": len(invocations),
-            "successful_invocations": successful_count,
-            "failed_invocations": failed_count,
-            "invocations": invocations,
+        tool_json_data = {
+            "tool_name": clean_tool_name,
+            "status": final_status,
+            "current_call": current_call,
+            "last_result": last_result,
+            "errors": errors,
+            "execution_count": execution_count,
+            "last_updated": now_iso,
         }
 
         with open(tool_file, "w", encoding="utf-8") as f:
-            json.dump(updated_tool_data, f, indent=2, default=str)
+            json.dump(tool_json_data, f, indent=2, default=str)
 
 
 # ---------------------------------------------------------------------------

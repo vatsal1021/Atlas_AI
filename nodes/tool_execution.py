@@ -46,17 +46,23 @@ def tool_execution(state: TripState) -> dict[str, Any]:
         observations.append(_make_obs(tool_name, arguments, None, "error", error_msg))
         tsm.record(tool_name, success=False, latency=0.0)
         if tracker:
-            tracker.track_tool_call(tool_name, arguments, None, status="Failed", error=error_msg)
+            tracker.track_tool_call(tool_name, arguments, None, status="failed", error=error_msg)
         return {
             "tool_observations": observations,
             "tool_selection_memory": tsm.data,
             "pending_tool_call": {},
         }
 
+    # Record real-time tool start in runtime/<tool_name>.json
+    if tracker:
+        tracker.track_tool_start(tool_name, arguments)
+
     start = time.time()
     try:
         module = importlib.import_module(module_path)
-        tool_fn = getattr(module, tool_name)
+        tool_fn = getattr(module, tool_name, None)
+        if not tool_fn:
+            raise AttributeError(f"Function '{tool_name}' not found in module '{module_path}'.")
         result = tool_fn(**arguments)
         latency = time.time() - start
 
@@ -68,11 +74,12 @@ def tool_execution(state: TripState) -> dict[str, Any]:
             tool_name, latency,
         )
         if tracker:
-            tracker.track_tool_call(tool_name, arguments, result, status="Success")
+            tracker.track_tool_call(tool_name, arguments, result, status="completed")
 
     except Exception as exc:
         latency = time.time() - start
         error_msg = str(exc)
+        result = None
         observations.append(_make_obs(tool_name, arguments, None, "error", error_msg))
         tsm.record(tool_name, success=False, latency=latency)
 
@@ -80,16 +87,16 @@ def tool_execution(state: TripState) -> dict[str, Any]:
             "tool_execution: tool=%s  error=%s", tool_name, error_msg
         )
         if tracker:
-            tracker.track_tool_call(tool_name, arguments, None, status="Failed", error=error_msg)
+            tracker.track_tool_call(tool_name, arguments, None, status="failed", error=error_msg)
 
     # Accumulate booking / payment results
     booking_results = list(state.get("booking_results", []))
     payment_results = list(state.get("payment_results", []))
 
-    if tool_name in ("book_flight", "book_hotel", "book_train", "make_reservation") and isinstance(result, dict) and result.get("booking_id"):
+    if tool_name in ("book_flight", "flight_booking", "book_hotel", "hotel_booking", "book_train", "train_booking", "make_reservation") and isinstance(result, dict) and result.get("booking_id"):
         booking_results.append(result)
 
-    if tool_name == "process_payment" and isinstance(result, dict) and result.get("transaction_id"):
+    if tool_name in ("process_payment", "payment") and isinstance(result, dict) and result.get("transaction_id"):
         payment_results.append(result)
 
     return {

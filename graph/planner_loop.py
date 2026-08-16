@@ -90,9 +90,21 @@ def create_initial_state(
         memory_context=dict(existing.get("memory_context", {})),
         session_summary=dict(existing.get("session_summary", {})),
 
-        # Booking Results (accumulate confirmed bookings across turns)
+        # Booking & Results (preserve across turns)
+        booking_flow_active=existing.get("booking_flow_active", False),
+        selected_booking=dict(existing.get("selected_booking", {})),
         booking_results=list(existing.get("booking_results", [])),
         payment_results=list(existing.get("payment_results", [])),
+        booking_type=existing.get("booking_type", ""),
+        booking_details=dict(existing.get("booking_details", {})),
+        booking_requirements=dict(existing.get("booking_requirements", {})),
+        missing_booking_fields=list(existing.get("missing_booking_fields", [])),
+        booking_requirements_complete=existing.get("booking_requirements_complete", False),
+        booking_capability_available=existing.get("booking_capability_available", False),
+        booking_capability_reason=existing.get("booking_capability_reason", ""),
+        booking_ready=existing.get("booking_ready", False),
+        passenger_info=list(existing.get("passenger_info", [])),
+        guest_info=dict(existing.get("guest_info", {})),
 
         # Meta
         errors=[],

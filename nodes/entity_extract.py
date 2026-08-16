@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -51,6 +52,10 @@ def entity_extract(state: TripState) -> dict[str, Any]:
     # Merge: new values override prior values for the same key
     merged = {**prior_entities, **{k: v for k, v in new_entities.items() if v not in (None, "", [], {})}}
 
+    # Preserve day component when partial month/year corrections are made
+    if "start_date" in prior_entities and "start_date" in new_entities:
+        merged["start_date"] = _merge_date_entities(prior_entities["start_date"], new_entities["start_date"], history)
+
     logger.info(
         "entity_extract: extracted_keys=%s", list(new_entities.keys())
     )
@@ -63,6 +68,59 @@ def entity_extract(state: TripState) -> dict[str, Any]:
         "extracted_entities": merged,
         "memory_context": memory_context,
     }
+
+
+def _merge_date_entities(prior_date: Any, new_date: Any, history: list[dict]) -> Any:
+    """Intelligently merge date components so partial updates (e.g. 'august 2026')
+    don't drop previously stated days (e.g. '20th').
+    """
+    p_str = str(prior_date or "")
+    n_str = str(new_date or "")
+
+    if not n_str and not p_str:
+        return None
+    if not p_str:
+        return n_str
+    if not n_str:
+        return p_str
+
+    # Extract day from prior_date or history if missing in new_date
+    day_match_new = re.search(r'\b(0?[1-9]|[12][0-9]|3[01])\b', n_str)
+    day_match_prior = re.search(r'\b(0?[1-9]|[12][0-9]|3[01])\b', p_str)
+
+    if not day_match_prior and history:
+        for msg in reversed(history):
+            content = msg.get("content", "")
+            d_m = re.search(r'\b(0?[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th)?\b', content, re.IGNORECASE)
+            if d_m:
+                day_match_prior = d_m
+                break
+
+    # Check if prior had a day but new does not
+    if not day_match_new and day_match_prior:
+        day = day_match_prior.group(1).zfill(2)
+        year_match = re.search(r'\b(20[2-9][0-9])\b', n_str)
+        month_match = re.search(r'\b(0?[1-9]|1[0-2])\b', n_str)
+        
+        months_map = {
+            "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+            "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
+        }
+        found_month = None
+        for m_name, m_code in months_map.items():
+            if m_name in n_str.lower():
+                found_month = m_code
+                break
+        
+        if not found_month and month_match:
+            found_month = month_match.group(1).zfill(2)
+
+        found_year = year_match.group(1) if year_match else None
+
+        if found_month and found_year:
+            return f"{found_year}-{found_month}-{day}"
+
+    return n_str
 
 
 def _extract_json(text: str) -> dict:

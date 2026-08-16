@@ -81,6 +81,20 @@ class TripState(TypedDict, total=False):
     booking_results: list[dict]          # confirmed bookings this session
     payment_results: list[dict]          # confirmed payments this session
 
+    # ── Booking Readiness & Capability ──────────────────────────────────
+    booking_flow_active: bool            # True while user is in active train/flight/hotel booking flow
+    selected_booking: dict               # Specific train/flight/hotel option selected by user
+    booking_type: str                    # train | flight | hotel
+    booking_details: dict                # selected train/flight/hotel details
+    booking_requirements: dict           # validator output dict
+    missing_booking_fields: list[str]    # missing required fields (e.g. ["passenger.age"])
+    booking_requirements_complete: bool  # True when all required fields present
+    booking_capability_available: bool   # True when authenticated API provider configured
+    booking_capability_reason: str       # explanation if capability is unavailable
+    booking_ready: bool                  # booking_requirements_complete AND booking_capability_available
+    passenger_info: list[dict]           # accumulated passenger details across turns
+    guest_info: dict                     # accumulated guest details across turns
+
     # ── Error / Meta ────────────────────────────────────────────────────
     errors: list[dict]                   # error log
     iteration_count: int                 # total graph node executions

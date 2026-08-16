@@ -47,8 +47,11 @@ CRITIC_REACT_ITERATION_THRESHOLD: int = 3   # ran ≥ this many ReAct steps
 TOOL_REGISTRY: dict[str, str] = {
     # Research
     "search_flights":        "tools.travel_research",
+    "flight_search":         "tools.travel_research",
     "search_hotels":         "tools.travel_research",
+    "hotel_search":          "tools.travel_research",
     "search_trains":         "tools.travel_research",
+    "train_search":          "tools.travel_research",
     "get_weather":           "tools.weather",
     "optimize_route":        "tools.route_optimizer",
     "generate_alternatives": "tools.alternative_generator",
@@ -57,9 +60,16 @@ TOOL_REGISTRY: dict[str, str] = {
     "load_preferences":      "tools.memory",
     # Booking & payment
     "book_flight":           "tools.booking",
+    "flight_booking":        "tools.booking",
     "book_hotel":            "tools.booking",
+    "hotel_booking":         "tools.booking",
     "book_train":            "tools.booking",
+    "train_booking":         "tools.booking",
     "make_reservation":      "tools.reservation",
     "process_payment":       "tools.payment",
+    "payment":               "tools.payment",
     "cancel_booking":        "tools.booking",
+    # Notifications
+    "send_email_confirmation": "tools.notifications",
+    "send_sms_confirmation":   "tools.notifications",
 }

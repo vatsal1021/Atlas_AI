@@ -16,7 +16,8 @@ PLAN_PROPOSAL          = "plan_proposal"
 REACT                  = "react"
 TOOL_EXECUTION         = "tool_execution"
 
-# ── Human approval ────────────────────────────────────────────────────
+# ── Booking & Approval ────────────────────────────────────────────────
+BOOKING_REQUIREMENTS   = "booking_requirements"
 HUMAN_APPROVAL         = "human_approval"
 
 # ── Quality assurance ─────────────────────────────────────────────────

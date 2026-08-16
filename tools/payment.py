@@ -70,3 +70,8 @@ def process_payment(
         is_stub=True,
     )
     return receipt.model_dump()
+
+
+# Aliases
+payment = process_payment
+

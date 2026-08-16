@@ -1,6 +1,6 @@
 """LangGraph StateGraph definition and compilation — new architecture.
 
-Single-pass, intent-driven, ReAct-centred graph with 13 nodes.
+Single-pass, intent-driven, ReAct-centred graph with 14 nodes.
 Preserves MemorySaver checkpointing and the full tracing/observability system.
 """
 
@@ -22,6 +22,7 @@ from graph.edges import (
     PLAN_PROPOSAL,
     REACT,
     TOOL_EXECUTION,
+    BOOKING_REQUIREMENTS,
     HUMAN_APPROVAL,
     REFLECT,
     CRITIC_GATE,
@@ -33,6 +34,7 @@ from graph.router import (
     route_after_negotiation_classify,
     route_after_intent_path,
     route_after_react,
+    route_after_booking_requirements,
     route_after_approval,
     route_after_reflect,
     route_after_critic_gate,
@@ -48,6 +50,7 @@ from nodes.negotiation_question import negotiation_question
 from nodes.plan_proposal import plan_proposal
 from nodes.react import react
 from nodes.tool_execution import tool_execution
+from nodes.booking_requirements import booking_requirements_node
 from nodes.human_approval import human_approval
 from nodes.reflect import reflect
 from nodes.critic_gate import critic_gate
@@ -118,14 +121,15 @@ def build_graph() -> StateGraph:
     PATH_GATE_SETTER = "path_gate_setter"
     builder.add_node(PATH_GATE_SETTER, _instrument_node(PATH_GATE_SETTER, _set_path_gate_mode))
 
-    builder.add_node(PLAN_PROPOSAL,       _instrument_node(PLAN_PROPOSAL,       plan_proposal))
-    builder.add_node(REACT,               _instrument_node(REACT,               react))
-    builder.add_node(TOOL_EXECUTION,      _instrument_node(TOOL_EXECUTION,      tool_execution))
-    builder.add_node(HUMAN_APPROVAL,      _instrument_node(HUMAN_APPROVAL,      human_approval))
-    builder.add_node(REFLECT,             _instrument_node(REFLECT,             reflect))
-    builder.add_node(CRITIC_GATE,         _instrument_node(CRITIC_GATE,         critic_gate))
-    builder.add_node(CRITIC,              _instrument_node(CRITIC,              critic))
-    builder.add_node(RELEVANT_RESPONSE,   _instrument_node(RELEVANT_RESPONSE,   relevant_response))
+    builder.add_node(PLAN_PROPOSAL,        _instrument_node(PLAN_PROPOSAL,        plan_proposal))
+    builder.add_node(REACT,                _instrument_node(REACT,                react))
+    builder.add_node(TOOL_EXECUTION,       _instrument_node(TOOL_EXECUTION,       tool_execution))
+    builder.add_node(BOOKING_REQUIREMENTS, _instrument_node(BOOKING_REQUIREMENTS, booking_requirements_node))
+    builder.add_node(HUMAN_APPROVAL,       _instrument_node(HUMAN_APPROVAL,       human_approval))
+    builder.add_node(REFLECT,              _instrument_node(REFLECT,              reflect))
+    builder.add_node(CRITIC_GATE,          _instrument_node(CRITIC_GATE,          critic_gate))
+    builder.add_node(CRITIC,               _instrument_node(CRITIC,               critic))
+    builder.add_node(RELEVANT_RESPONSE,    _instrument_node(RELEVANT_RESPONSE,    relevant_response))
 
     # ── Entry point ──────────────────────────────────────────────────────
     builder.set_entry_point(INTENT_NODE)
@@ -172,9 +176,21 @@ def build_graph() -> StateGraph:
         REACT,
         _instrument_router(REACT, route_after_react),
         {
-            TOOL_EXECUTION: TOOL_EXECUTION,
+            TOOL_EXECUTION:       TOOL_EXECUTION,
+            BOOKING_REQUIREMENTS: BOOKING_REQUIREMENTS,
+            HUMAN_APPROVAL:       HUMAN_APPROVAL,
+            REFLECT:              REFLECT,
+        },
+    )
+
+    # ── BookingRequirementsNode → conditional ────────────────────────────
+    builder.add_conditional_edges(
+        BOOKING_REQUIREMENTS,
+        _instrument_router(BOOKING_REQUIREMENTS, route_after_booking_requirements),
+        {
             HUMAN_APPROVAL: HUMAN_APPROVAL,
             REFLECT:        REFLECT,
+            REACT:          REACT,
         },
     )
 
@@ -217,7 +233,7 @@ def build_graph() -> StateGraph:
     # ── Terminal: RelevantResponseNode ───────────────────────────────────
     builder.add_edge(RELEVANT_RESPONSE, END)
 
-    logger.info("Graph built: 13 nodes, single-pass ReAct architecture")
+    logger.info("Graph built: 14 nodes, single-pass ReAct architecture")
     return builder
 
 

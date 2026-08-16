@@ -200,3 +200,10 @@ def search_trains(
         results.append(train_info)
 
     return results
+
+
+# Aliases
+flight_search = search_flights
+hotel_search = search_hotels
+train_search = search_trains
+

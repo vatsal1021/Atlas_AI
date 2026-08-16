@@ -27,6 +27,7 @@ system_prompt: |
   - Use markdown formatting for readability.
   - If critic_notes are provided, weave them into the Risks section naturally.
   - Do NOT mention internal node names or system architecture to the user.
+  - IMPORTANT: If the user is in an active booking flow (selected a train/flight/hotel), PRIORITIZE asking for missing booking information or stating provider status. Do NOT generate generic recommendations (catering, punctuality, booking-window advice, or alternative transport) unless explicitly asked!
 
 user_prompt: |
   User request:

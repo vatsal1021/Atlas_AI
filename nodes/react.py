@@ -43,6 +43,17 @@ def react(state: TripState) -> dict[str, Any]:
 
     # Build tool selection memory context
     tsm = ToolSelectionMemory(state.get("tool_selection_memory", {}))
+    booking_type = state.get("booking_type", "None")
+    req_complete = state.get("booking_requirements_complete", False)
+    cap_available = state.get("booking_capability_available", False)
+    missing_fields = state.get("missing_booking_fields", [])
+    cap_reason = state.get("booking_capability_reason", "")
+
+    booking_status_summary = (
+        f"Type: {booking_type} | Requirements Complete: {req_complete} | "
+        f"Missing Fields: {missing_fields} | Capability Available: {cap_available}"
+        + (f" ({cap_reason})" if cap_reason else "")
+    )
 
     system_prompt, user_template = load_prompt("react")
     user_content = user_template.format(
@@ -53,6 +64,7 @@ def react(state: TripState) -> dict[str, Any]:
         reflect_feedback=reflect_feedback or "None",
         tool_memory_summary=tsm.summary(),
         conversation_history=_format_history(history),
+        booking_status_summary=booking_status_summary,
         react_iteration=react_iter,
     )
 
@@ -72,9 +84,31 @@ def react(state: TripState) -> dict[str, Any]:
     if decision not in ("act", "critical_action", "respond", "complete"):
         decision = "respond"
 
-    # Determine if this tool is irreversible
+    # Fallback guard: if user asks to book and info is complete & cap available, enforce critical_action
     tool_name = tool_call.get("tool", "") if tool_call else ""
-    if decision == "act" and tool_name in IRREVERSIBLE_TOOLS:
+    already_booked = any(
+        obs.get("tool") in ("book_train", "book_flight", "book_hotel", "train_booking", "flight_booking", "hotel_booking")
+        and obs.get("status") in ("success", "completed")
+        for obs in observations
+    )
+
+    if already_booked:
+        if decision == "critical_action" or tool_name in ("book_train", "book_flight", "book_hotel"):
+            decision = "respond"
+            tool_call = {}
+            tool_name = ""
+    elif decision == "respond" and "book" in user_input.lower():
+        b_type = state.get("booking_type") or ("train" if "train" in user_input.lower() else "flight" if "flight" in user_input.lower() else "hotel" if "hotel" in user_input.lower() else "")
+        if b_type and (req_complete or state.get("booking_requirements_complete")):
+            tool_name = f"book_{b_type}"
+            decision = "critical_action"
+            tool_call = {
+                "tool": tool_name,
+                "arguments": state.get("booking_details", {}),
+                "reasoning": f"User requested to book {b_type} and all required fields are complete."
+            }
+
+    if decision == "act" and tool_name in IRREVERSIBLE_TOOLS and not already_booked:
         decision = "critical_action"
 
     reasoning_log.append(f"[Step {react_iter + 1}] {reasoning}")

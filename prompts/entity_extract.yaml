@@ -11,6 +11,15 @@ system_prompt: |
     - end_date (ISO format or relative)
     - duration_days (number of days)
     - travelers (number of people)
+    - passenger_name (full name of traveler/passenger if provided)
+    - passenger_age (age of passenger if provided, e.g. 22)
+    - passenger_gender (gender of passenger, e.g. male, female)
+    - berth_preference (e.g. lower berth, upper berth, side lower)
+    - travel_class (e.g. CC, EC, 3A, 2A, 1A, economy, business)
+    - seat_preference (e.g. window, aisle)
+    - passport_or_id (ID or passport number if provided)
+    - guest_name (name of hotel guest)
+    - contact (email or phone number)
     - travel_preferences (list: e.g. ["luxury", "adventure", "family-friendly"])
     - constraints (list: e.g. ["vegetarian meals", "no overnight flights", "wheelchair accessible"])
     - known_entities (list: specific hotels, airlines, attractions already mentioned)
@@ -19,6 +28,7 @@ system_prompt: |
   IMPORTANT:
   - If a field is not mentioned and cannot be inferred, omit it.
   - Merge new values with prior_entities: new values override prior values for the same key.
+  - CRITICAL FOR DATES: When updating start_date or end_date, preserve previously stated day numbers (e.g. 20th) unless explicitly changed. If prior_entities contained day 20 and user corrects to "august 2026", output "2026-08-20".
   - Do NOT hallucinate values. Only extract what is clearly stated or strongly implied.
 
   Respond with ONLY a JSON object - no explanations, no markdown fences.

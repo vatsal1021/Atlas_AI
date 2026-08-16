@@ -60,17 +60,29 @@ def human_approval(state: TripState) -> dict[str, Any]:
         is_reversible=False,
     )
 
-    # Ask the LLM to compose a friendly approval message
+    # Include passenger info, guest info, and booking details in approval prompt
+    passengers = state.get("passenger_info", [])
+    guest = state.get("guest_info", {})
+    provider_reason = state.get("booking_capability_reason")
+
+    action_details = {
+        "tool": tool,
+        "parameters": action.parameters,
+        "reasoning": action.reasoning,
+        "passengers": passengers,
+        "guest_info": guest,
+    }
+    actions_summary = json.dumps(action_details, indent=2)
+
+    # Ask the LLM to compose a friendly approval message with full details
     llm = get_llm()
-    actions_summary = json.dumps(
-        action.model_dump(include={"tool", "parameters", "reasoning"}), indent=2
-    )
     sys_msg = SystemMessage(content=(
-        "You are a travel assistant. The following irreversible action is about to be executed. "
-        "Write a short, friendly confirmation message for the user (2-3 sentences) summarising "
-        "what will happen and asking for approval."
+        "You are a travel assistant. The following booking action has been validated and capability-checked. "
+        "Write a clear, friendly confirmation message for the user summarizing the booking details "
+        "(item name/number, route/location, date, passenger/guest names, ages, berth/seat preferences, and price) "
+        "and asking for approval before executing."
     ))
-    human_msg = HumanMessage(content=f"Action:\n{actions_summary}")
+    human_msg = HumanMessage(content=f"Booking Details:\n{actions_summary}")
 
     try:
         response = llm.invoke([sys_msg, human_msg])
