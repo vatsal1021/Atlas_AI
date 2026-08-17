@@ -45,28 +45,26 @@ def generate_alternatives(
 
     if option_type == "flight":
         # Relax constraints: try different dates, airlines
-        origin = failed_option.get("origin", kwargs.get("origin", "Delhi"))
-        destination = failed_option.get("destination", kwargs.get("destination", "Tokyo"))
-        date = failed_option.get("date", kwargs.get("date", "2026-09-01"))
-        passengers = failed_option.get("passengers", kwargs.get("passengers", 1))
+        origin = failed_option.get("origin") or kwargs.get("origin") or ""
+        destination = failed_option.get("destination") or kwargs.get("destination") or ""
+        date = failed_option.get("date") or kwargs.get("date") or ""
+        passengers = failed_option.get("passengers") or kwargs.get("passengers") or 1
 
-        # Search with the same params (mock tools return varied results)
         alternatives = search_flights(
             origin=origin,
             destination=destination,
             date=date,
             passengers=passengers,
         )
-        # Tag as alternatives
         for alt in alternatives:
             alt["is_alternative"] = True
             alt["original_option"] = failed_option.get("name", "unknown")
 
     elif option_type == "hotel":
-        destination = failed_option.get("destination", kwargs.get("destination", "Tokyo"))
-        checkin = failed_option.get("checkin", kwargs.get("checkin", "2026-09-01"))
-        checkout = failed_option.get("checkout", kwargs.get("checkout", "2026-09-06"))
-        guests = failed_option.get("guests", kwargs.get("guests", 1))
+        destination = failed_option.get("destination") or kwargs.get("destination") or ""
+        checkin = failed_option.get("checkin") or kwargs.get("checkin") or ""
+        checkout = failed_option.get("checkout") or kwargs.get("checkout") or ""
+        guests = failed_option.get("guests") or kwargs.get("guests") or 1
 
         alternatives = search_hotels(
             destination=destination,

@@ -66,8 +66,8 @@ def booking_requirements_node(state: TripState) -> Dict[str, Any]:
             "train_name": "Shatabdi Express",
             "train_number": "12004",
             "departure_time": "14:00",
-            "origin": entities.get("origin", "Lucknow"),
-            "destination": entities.get("destination", "Kanpur"),
+            "origin": entities.get("origin"),
+            "destination": entities.get("destination"),
             "date": entities.get("start_date"),
         })
         booking_details.update(selected_booking)

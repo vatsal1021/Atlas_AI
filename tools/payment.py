@@ -72,6 +72,3 @@ def process_payment(
     return receipt.model_dump()
 
 
-# Aliases
-payment = process_payment
-

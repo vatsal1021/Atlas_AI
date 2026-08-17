@@ -39,19 +39,49 @@ def _validate_and_reconcile_booking_payload(tool_name: str, arguments: dict, sta
     state_start_date = entities.get("start_date") or guest_info.get("checkin_date") or selected.get("date")
     state_end_date = entities.get("end_date") or guest_info.get("checkout_date")
 
+    tool_obs = state.get("tool_observations", [])
+
     if tool_name in ("book_hotel", "hotel_booking"):
         if state_start_date:
             reconciled["checkin_date"] = state_start_date
         if state_end_date:
             reconciled["checkout_date"] = state_end_date
-        if not reconciled.get("hotel_name") and selected.get("hotel_name"):
-            reconciled["hotel_name"] = selected.get("hotel_name")
+        if not reconciled.get("hotel_name"):
+            h_name = selected.get("hotel_name")
+            if not h_name:
+                h_obs = [obs for obs in tool_obs if obs.get("tool") in ("search_hotels", "hotel_search")]
+                if h_obs and isinstance(h_obs[-1].get("result"), list) and len(h_obs[-1]["result"]) > 0:
+                    h_name = h_obs[-1]["result"][0].get("name") or h_obs[-1]["result"][0].get("hotel_name")
+            if h_name:
+                reconciled["hotel_name"] = h_name
         if not reconciled.get("guest_info") and guest_info:
             reconciled["guest_info"] = guest_info
 
-    elif tool_name in ("book_train", "train_booking", "book_flight", "flight_booking"):
+    elif tool_name in ("book_train", "train_booking"):
         if state_start_date:
             reconciled["date"] = state_start_date
+        if not reconciled.get("train_number"):
+            t_num = selected.get("train_number") or state.get("booking_details", {}).get("train_number")
+            if not t_num:
+                t_obs = [obs for obs in tool_obs if obs.get("tool") in ("search_trains", "train_search")]
+                if t_obs and isinstance(t_obs[-1].get("result"), list) and len(t_obs[-1]["result"]) > 0:
+                    t_num = t_obs[-1]["result"][0].get("train_number") or t_obs[-1]["result"][0].get("number") or t_obs[-1]["result"][0].get("id")
+            if t_num:
+                reconciled["train_number"] = t_num
+        if not reconciled.get("passengers") and passenger_info:
+            reconciled["passengers"] = passenger_info
+
+    elif tool_name in ("book_flight", "flight_booking"):
+        if state_start_date:
+            reconciled["date"] = state_start_date
+        if not reconciled.get("flight_number"):
+            f_num = selected.get("flight_number") or state.get("booking_details", {}).get("flight_number")
+            if not f_num:
+                f_obs = [obs for obs in tool_obs if obs.get("tool") in ("search_flights", "flight_search")]
+                if f_obs and isinstance(f_obs[-1].get("result"), list) and len(f_obs[-1]["result"]) > 0:
+                    f_num = f_obs[-1]["result"][0].get("flight_number") or f_obs[-1]["result"][0].get("number") or f_obs[-1]["result"][0].get("id")
+            if f_num:
+                reconciled["flight_number"] = f_num
         if not reconciled.get("passengers") and passenger_info:
             reconciled["passengers"] = passenger_info
 
