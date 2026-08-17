@@ -73,6 +73,16 @@ class TestGetWeather:
             assert "condition" in day
             assert "rain_probability" in day
 
+    def test_handles_location_and_date_aliases(self):
+        """get_weather should accept location/city/place and date kwargs cleanly without failing."""
+        r1 = get_weather(location="Mumbai", date="2026-09-10")
+        assert isinstance(r1, list)
+        assert len(r1) >= 1
+
+        r2 = get_weather(city="Paris", start="2026-09-10", end="2026-09-12")
+        assert isinstance(r2, list)
+        assert len(r2) == 3
+
 
 class TestMemory:
     """Tests for the memory tool."""
