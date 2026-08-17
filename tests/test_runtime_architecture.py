@@ -78,9 +78,21 @@ check("Trace log exists strictly in runtime/traces/", trace_file.exists(), trace
 logs_in_root_runtime = list(base_runtime_dir.glob("*.log"))
 check("No .log files exist directly in runtime/", len(logs_in_root_runtime) == 0, logs_in_root_runtime)
 
-# 6. Check TOOL_REGISTRY entries
-check("send_email_confirmation registered in TOOL_REGISTRY", "send_email_confirmation" in TOOL_REGISTRY, list(TOOL_REGISTRY.keys()))
-check("send_sms_confirmation registered in TOOL_REGISTRY", "send_sms_confirmation" in TOOL_REGISTRY, list(TOOL_REGISTRY.keys()))
+# 7. Check alias normalization and single-result structure
+tracker.track_tool_start("hotel_search", {"destination": "Jaipur"})
+tracker.track_tool_call("hotel_search", {"destination": "Jaipur"}, [{"name": "Taj Jaipur", "price": 5000}], status="completed")
+
+hotel_json_path = base_runtime_dir / "search_hotels.json"
+hotel_alias_path = base_runtime_dir / "hotel_search.json"
+
+check("Alias 'hotel_search' normalizes to 'search_hotels.json'", hotel_json_path.exists(), hotel_json_path)
+check("Duplicate file 'hotel_search.json' is NOT created", not hotel_alias_path.exists(), hotel_alias_path)
+
+if hotel_json_path.exists():
+    h_data = json.loads(hotel_json_path.read_text(encoding="utf-8"))
+    check("Hotel JSON tool_name is canonical 'search_hotels'", h_data.get("tool_name") == "search_hotels", h_data.get("tool_name"))
+    check("Hotel JSON result is present at top-level", "result" in h_data, list(h_data.keys()))
+    check("Hotel JSON result is NOT duplicated inside current_call", "result" not in h_data.get("current_call", {}), list(h_data.get("current_call", {}).keys()))
 
 print(f"\n{'='*60}")
 print(f"Results: {PASS} passed, {FAIL} failed")

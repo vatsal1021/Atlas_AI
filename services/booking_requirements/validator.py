@@ -41,13 +41,13 @@ def validate_booking_requirements(
     collected_info: Dict[str, Any] = {}
 
     if norm_type == "train":
-        # Check passenger details
-        p0 = passengers[0] if (isinstance(passengers, list) and passengers) else {}
-        
+        pax_list = passengers if (isinstance(passengers, list) and passengers) else []
+        p0 = pax_list[0] if pax_list else {}
+
         name = p0.get("name") or details.get("passenger_name") or details.get("name") or entities.get("passenger_name")
         age = p0.get("age") or details.get("passenger_age") or details.get("age") or entities.get("passenger_age")
         gender = p0.get("gender") or details.get("passenger_gender") or details.get("gender") or entities.get("passenger_gender")
-        berth = p0.get("berth_preference") or details.get("berth_preference") or details.get("berth") or entities.get("berth_preference")
+        berth = p0.get("berth_preference") or p0.get("berth") or details.get("berth_preference") or details.get("berth") or entities.get("berth_preference")
         travel_class = p0.get("class") or p0.get("travel_class") or details.get("travel_class") or details.get("class") or entities.get("travel_class")
 
         field_map = {
@@ -96,7 +96,7 @@ def validate_booking_requirements(
         contact = guest.get("contact_email_or_phone") or guest.get("email") or guest.get("phone") or details.get("contact") or entities.get("contact")
         checkin = guest.get("checkin_date") or details.get("checkin_date") or details.get("checkin") or entities.get("start_date")
         checkout = guest.get("checkout_date") or details.get("checkout_date") or details.get("checkout") or entities.get("end_date")
-        room_type = guest.get("room_type") or details.get("room_type") or entities.get("room_type")
+        room_type = guest.get("room_type") or details.get("room_type") or entities.get("room_type") or "Standard Room"
 
         field_map = {
             "guest.name": name,

@@ -94,6 +94,8 @@ class TripState(TypedDict, total=False):
     booking_ready: bool                  # booking_requirements_complete AND booking_capability_available
     passenger_info: list[dict]           # accumulated passenger details across turns
     guest_info: dict                     # accumulated guest details across turns
+    booking_queue: list[dict]            # sequential list of items awaiting booking e.g. [{"type": "train", "name": "..."}, ...]
+    current_booking_index: int           # active item index in booking_queue
 
     # ── Error / Meta ────────────────────────────────────────────────────
     errors: list[dict]                   # error log

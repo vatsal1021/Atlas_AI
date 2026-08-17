@@ -42,6 +42,34 @@ CRITIC_TRIGGER_TOOLS: set[str] = {
 CRITIC_REACT_ITERATION_THRESHOLD: int = 3   # ran ≥ this many ReAct steps
 
 # ---------------------------------------------------------------------------
+# Canonical Tool Name Map — maps aliases to single canonical names
+# ---------------------------------------------------------------------------
+CANONICAL_TOOL_MAP: dict[str, str] = {
+    # Research
+    "hotel_search":          "search_hotels",
+    "hotels_search":         "search_hotels",
+    "search_hotel":          "search_hotels",
+    "flight_search":         "search_flights",
+    "flights_search":        "search_flights",
+    "search_flight":         "search_flights",
+    "train_search":          "search_trains",
+    "trains_search":         "search_trains",
+    "search_train":          "search_trains",
+    # Booking & Payment
+    "hotel_booking":         "book_hotel",
+    "flight_booking":        "book_flight",
+    "train_booking":         "book_train",
+    "payment":               "process_payment",
+}
+
+
+def get_canonical_tool_name(tool_name: str) -> str:
+    """Return the canonical tool name for any tool or alias."""
+    clean = tool_name.strip().lower()
+    return CANONICAL_TOOL_MAP.get(clean, clean)
+
+
+# ---------------------------------------------------------------------------
 # Tool registry  name → module path  (used by ToolExecutionNode)
 # ---------------------------------------------------------------------------
 TOOL_REGISTRY: dict[str, str] = {
@@ -50,6 +78,7 @@ TOOL_REGISTRY: dict[str, str] = {
     "flight_search":         "tools.travel_research",
     "search_hotels":         "tools.travel_research",
     "hotel_search":          "tools.travel_research",
+    "hotels_search":         "tools.travel_research",
     "search_trains":         "tools.travel_research",
     "train_search":          "tools.travel_research",
     "get_weather":           "tools.weather",

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def book_train(
-    train_number: str = "82501",
-    date: str = "2026-08-20",
+    train_number: str | None = None,
+    date: str | None = None,
     passengers: list | None = None,
     travel_class: str = "CC",
     **kwargs: Any,
@@ -32,9 +32,9 @@ def book_train(
         logger.error("book_train: execution blocked — %s", reason)
         raise RuntimeError(f"Booking execution unavailable: {reason}")
 
-    train_id = train_number or kwargs.get("train_id", "82501")
-    journey_date = date or kwargs.get("journey_date", "2026-08-20")
-    pax_list = passengers or kwargs.get("passenger_info", [{"name": "Default Traveler"}])
+    train_id = train_number or kwargs.get("train_id") or "82501"
+    journey_date = date or kwargs.get("journey_date") or kwargs.get("date")
+    pax_list = passengers or kwargs.get("passenger_info", [{"name": "Traveler"}])
     class_type = travel_class or kwargs.get("class_type", "CC")
 
     provider = RailwayBookingProvider()
@@ -49,8 +49,8 @@ def book_train(
 
 
 def book_flight(
-    flight_number: str = "6E252",
-    date: str = "2026-08-20",
+    flight_number: str | None = None,
+    date: str | None = None,
     passengers: list | None = None,
     seat_preference: str = "window",
     **kwargs: Any,
@@ -62,9 +62,9 @@ def book_flight(
         logger.error("book_flight: execution blocked — %s", reason)
         raise RuntimeError(f"Booking execution unavailable: {reason}")
 
-    flt_no = flight_number or kwargs.get("flight_id", "6E252")
-    flt_date = date or kwargs.get("travel_date", "2026-08-20")
-    pax_list = passengers or kwargs.get("passenger_info", [{"name": "Default Traveler"}])
+    flt_no = flight_number or kwargs.get("flight_id") or "6E252"
+    flt_date = date or kwargs.get("travel_date") or kwargs.get("date")
+    pax_list = passengers or kwargs.get("passenger_info", [{"name": "Traveler"}])
 
     provider = FlightBookingProvider()
     result = provider.execute_booking(
@@ -78,11 +78,11 @@ def book_flight(
 
 
 def book_hotel(
-    hotel_name: str = "Grand Hotel",
-    checkin_date: str = "2026-08-20",
-    checkout_date: str = "2026-08-23",
+    hotel_name: str | None = None,
+    checkin_date: str | None = None,
+    checkout_date: str | None = None,
     guest_info: dict | None = None,
-    room_type: str = "deluxe",
+    room_type: str = "Deluxe Room",
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Execute authenticated hotel booking via HotelBookingProvider."""
@@ -92,10 +92,10 @@ def book_hotel(
         logger.error("book_hotel: execution blocked — %s", reason)
         raise RuntimeError(f"Booking execution unavailable: {reason}")
 
-    h_name = hotel_name or kwargs.get("name", "Grand Hotel")
-    c_in = checkin_date or kwargs.get("checkin", "2026-08-20")
-    c_out = checkout_date or kwargs.get("checkout", "2026-08-23")
-    g_info = guest_info or kwargs.get("guest", {"name": "Default Guest"})
+    h_name = hotel_name or kwargs.get("name") or "Grand Hotel"
+    c_in = checkin_date or kwargs.get("checkin") or kwargs.get("start_date")
+    c_out = checkout_date or kwargs.get("checkout") or kwargs.get("end_date")
+    g_info = guest_info or kwargs.get("guest", {"name": "Guest"})
 
     provider = HotelBookingProvider()
     result = provider.execute_booking(

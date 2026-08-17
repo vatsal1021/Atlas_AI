@@ -39,8 +39,14 @@ def relevant_response(state: TripState) -> dict[str, Any]:
     booking_results = state.get("booking_results", [])
     payment_results = state.get("payment_results", [])
 
+    from datetime import datetime
+    now = datetime.now()
+    current_date = now.strftime("%Y-%m-%d")
+
     system_prompt, user_template = load_prompt("relevant_response")
+    system_prompt_formatted = system_prompt.replace("{current_date}", current_date)
     user_content = user_template.format(
+        current_date=current_date,
         user_input=user_input,
         planning_directive=json.dumps(directive, indent=2) if directive else "None",
         extracted_entities=json.dumps(extracted, indent=2),
@@ -99,14 +105,14 @@ def relevant_response(state: TripState) -> dict[str, Any]:
             item_desc += f" ({selected.get('train_number')})"
 
         reply = (
-            f"I have collected all the required passenger information for **{item_desc}**, "
-            f"but this system currently does not have an authenticated railway booking provider configured, "
-            f"so I cannot execute the live booking."
+            f"I have collected all the required details for **{item_desc}**. "
+            f"However, I am unable to complete the booking right now. "
+            f"Would you like me to try again or explore other travel options?"
         )
     else:
         llm = get_llm(temperature=0.5)
         response = llm.invoke([
-            SystemMessage(content=system_prompt),
+            SystemMessage(content=system_prompt_formatted),
             HumanMessage(content=user_content),
         ])
         reply = response.content.strip()  # type: ignore[union-attr]

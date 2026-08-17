@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -32,8 +33,15 @@ def entity_extract(state: TripState) -> dict[str, Any]:
     # Load long-term user preferences on first turn
     memory_context = state.get("memory_context") or load_preferences("default")
 
+    now = datetime.now()
+    current_date = now.strftime("%Y-%m-%d")
+    current_year = str(now.year)
+
     system_prompt, user_template = load_prompt("entity_extract")
+    system_prompt_formatted = system_prompt.replace("{current_date}", current_date).replace("{current_year}", current_year)
     user_content = user_template.format(
+        current_date=current_date,
+        current_year=current_year,
         user_input=user_input,
         prior_entities=json.dumps(prior_entities, indent=2) if prior_entities else "None",
         conversation_history=_format_history(history),
@@ -42,7 +50,7 @@ def entity_extract(state: TripState) -> dict[str, Any]:
 
     llm = get_llm()
     response = llm.invoke([
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=system_prompt_formatted),
         HumanMessage(content=user_content),
     ])
 

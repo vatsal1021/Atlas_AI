@@ -121,18 +121,21 @@ def route_after_react(state: TripState) -> str:
         for obs in observations
     )
 
-    # Check if a booking flow is active or user is selecting a specific option/booking
-    is_booking_selection = not already_booked and (
-        booking_flow
-        or decision == "critical_action"
-        or "shatabdi" in user_input
-        or "12004" in user_input
-        or "express" in user_input
-        or "book" in user_input
-        or tool_name in ("book_flight", "book_hotel", "book_train", "flight_booking", "hotel_booking", "train_booking")
+    # Has a search tool executed for this session?
+    has_searched = any(
+        obs.get("tool") in ("search_hotels", "hotel_search", "search_trains", "train_search", "search_flights", "flight_search")
+        for obs in observations
     )
 
-    if is_booking_selection:
+    is_confirmation_phrase = any(kw in user_input for kw in ("yes", "confirm", "proceed", "go ahead", "book it", "book this", "approved"))
+
+    is_explicit_book_intent = (
+        decision == "critical_action"
+        or tool_name in ("book_flight", "book_hotel", "book_train", "flight_booking", "hotel_booking", "train_booking")
+        or (has_searched and is_confirmation_phrase)
+    )
+
+    if not already_booked and is_explicit_book_intent:
         return BOOKING_REQUIREMENTS
 
     if decision == "act":

@@ -55,8 +55,14 @@ def react(state: TripState) -> dict[str, Any]:
         + (f" ({cap_reason})" if cap_reason else "")
     )
 
+    from datetime import datetime
+    now = datetime.now()
+    current_date = now.strftime("%Y-%m-%d")
+
     system_prompt, user_template = load_prompt("react")
+    system_prompt_formatted = system_prompt.replace("{current_date}", current_date)
     user_content = user_template.format(
+        current_date=current_date,
         user_input=user_input,
         planning_directive=json.dumps(directive, indent=2) if directive else "None",
         extracted_entities=json.dumps(extracted, indent=2),
@@ -70,7 +76,7 @@ def react(state: TripState) -> dict[str, Any]:
 
     llm = get_llm()
     response = llm.invoke([
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=system_prompt_formatted),
         HumanMessage(content=user_content),
     ])
 

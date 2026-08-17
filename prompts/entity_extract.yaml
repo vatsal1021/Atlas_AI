@@ -7,33 +7,39 @@ system_prompt: |
     - origin (departure city/country - if mentioned)
     - budget (numeric value)
     - currency (e.g. INR, USD, EUR - default INR if not stated)
-    - start_date (ISO format if given, or relative like "next Friday")
-    - end_date (ISO format or relative)
+    - start_date (ISO format YYYY-MM-DD or relative date)
+    - end_date (ISO format YYYY-MM-DD or relative date)
     - duration_days (number of days)
     - travelers (number of people)
-    - passenger_name (full name of traveler/passenger if provided)
+    - passenger_name (full name of primary traveler/passenger if provided)
     - passenger_age (age of passenger if provided, e.g. 22)
     - passenger_gender (gender of passenger, e.g. male, female)
     - berth_preference (e.g. lower berth, upper berth, side lower)
     - travel_class (e.g. CC, EC, 3A, 2A, 1A, economy, business)
     - seat_preference (e.g. window, aisle)
     - passport_or_id (ID or passport number if provided)
+    - passengers (list of objects for all passengers: [{"name": str, "age": int, "gender": str, "berth_preference": str, "class": str}])
     - guest_name (name of hotel guest)
     - contact (email or phone number)
     - travel_preferences (list: e.g. ["luxury", "adventure", "family-friendly"])
     - constraints (list: e.g. ["vegetarian meals", "no overnight flights", "wheelchair accessible"])
-    - known_entities (list: specific hotels, airlines, attractions already mentioned)
+    - known_entities (list: specific hotels, attractions already mentioned)
     - trip_type (e.g. "leisure", "business", "honeymoon", "backpacking")
 
   IMPORTANT:
+  - Today's live system date is {current_date} (Year {current_year}). Always use this live date as your reference benchmark.
+  - When the user says "this 22nd", "current month", "this month", "tomorrow", or "next Friday", resolve the date to ISO format YYYY-MM-DD using today's live system date ({current_date}). For example, if today is 2026-08-17 and user says "this 22nd", start_date is "2026-08-22".
+  - CRITICAL FOR MULTIPLE PASSENGERS: When information for 2 or more passengers is provided in the message, extract each passenger into the "passengers" array as a separate object. Preserve name, age, gender, and berth_preference for each passenger.
   - If a field is not mentioned and cannot be inferred, omit it.
   - Merge new values with prior_entities: new values override prior values for the same key.
-  - CRITICAL FOR DATES: When updating start_date or end_date, preserve previously stated day numbers (e.g. 20th) unless explicitly changed. If prior_entities contained day 20 and user corrects to "august 2026", output "2026-08-20".
-  - Do NOT hallucinate values. Only extract what is clearly stated or strongly implied.
+  - CRITICAL FOR DATES: When updating start_date or end_date, preserve previously stated day numbers (e.g. 20th) unless explicitly changed.
+  - Do NOT hallucinate past years or outdated dates. Only extract what is clearly stated or strongly implied based on the current date ({current_date}).
 
   Respond with ONLY a JSON object - no explanations, no markdown fences.
 
 user_prompt: |
+  Current Live Date: {current_date}
+
   User message:
   "{user_input}"
 

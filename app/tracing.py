@@ -24,6 +24,8 @@ from uuid import UUID
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 
+from app.settings import get_canonical_tool_name
+
 logger = logging.getLogger(__name__)
 
 # Context variable holds the active tracker for the current thread / async task
@@ -103,6 +105,17 @@ class ExecutionTracker:
                 legacy_log.unlink()
             except Exception:
                 pass
+
+        # Clean up legacy alias files (e.g. hotel_search.json, flight_search.json) if canonical version exists
+        from app.settings import CANONICAL_TOOL_MAP
+        for alias_name, canonical_name in CANONICAL_TOOL_MAP.items():
+            if alias_name != canonical_name:
+                alias_file = self.base_dir / f"{alias_name}.json"
+                if alias_file.exists():
+                    try:
+                        alias_file.unlink()
+                    except Exception:
+                        pass
 
         # Trace header
         started_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -386,8 +399,8 @@ class ExecutionTracker:
         node_name: Optional[str],
     ) -> None:
         """Create/update runtime/<tool_name>.json continuously in real-time."""
-        # Sanitize tool_name to build valid filename directly under runtime/
-        clean_tool_name = tool_name.strip().lower()
+        # Normalize tool_name using canonical map to build valid filename directly under runtime/
+        clean_tool_name = get_canonical_tool_name(tool_name)
         tool_file = self.base_dir / f"{clean_tool_name}.json"
 
         existing_data: Dict[str, Any] = {}
@@ -430,19 +443,18 @@ class ExecutionTracker:
 
         current_call = {
             "input": _serialize(input_params),
-            "result": _serialize(output),
             "success": is_success if not is_started else None,
             "timestamp": now_iso,
             "node": node_name or self.current_node,
         }
 
-        last_result = _serialize(output) if is_success else existing_data.get("last_result")
+        result = _serialize(output) if is_success else existing_data.get("result", existing_data.get("last_result"))
 
         tool_json_data = {
             "tool_name": clean_tool_name,
             "status": final_status,
             "current_call": current_call,
-            "last_result": last_result,
+            "result": result,
             "errors": errors,
             "execution_count": execution_count,
             "last_updated": now_iso,

@@ -26,21 +26,40 @@ def booking_requirements_node(state: TripState) -> Dict[str, Any]:
     entities = state.get("extracted_entities", {})
     user_input = state.get("user_input", "")
 
-    # Detect booking type
-    booking_type = state.get("booking_type", "")
-    if not booking_type:
-        if "train" in tool_name or "train" in user_input.lower() or "shatabdi" in user_input.lower() or "express" in user_input.lower() or "12004" in user_input:
-            booking_type = "train"
-        elif "flight" in tool_name or "flight" in user_input.lower() or "flight" in str(args).lower():
-            booking_type = "flight"
-        elif "hotel" in tool_name or "hotel" in user_input.lower() or "hotel" in str(args).lower():
-            booking_type = "hotel"
+    # Manage sequential booking queue for multi-item requests (e.g. train + hotel)
+    booking_queue = list(state.get("booking_queue", []))
+    current_index = state.get("current_booking_index", 0)
+
+    if not booking_queue:
+        queue_items = []
+        if any(kw in user_input.lower() for kw in ("train", "shatabdi", "express", "12004", "garib rath", "gareeb rath")) or "train" in tool_name:
+            queue_items.append({"type": "train"})
+        if any(kw in user_input.lower() for kw in ("hotel", "hyatt", "sakura", "stay", "resort")) or "hotel" in tool_name:
+            queue_items.append({"type": "hotel"})
+        if any(kw in user_input.lower() for kw in ("flight", "airline")) or "flight" in tool_name:
+            queue_items.append({"type": "flight"})
+
+        if queue_items:
+            booking_queue = queue_items
+            current_index = 0
+
+    if booking_queue and current_index < len(booking_queue):
+        booking_type = booking_queue[current_index]["type"]
+    else:
+        booking_type = state.get("booking_type", "")
+        if not booking_type:
+            if "train" in tool_name or "train" in user_input.lower() or "shatabdi" in user_input.lower() or "express" in user_input.lower() or "12004" in user_input or "garib rath" in user_input.lower() or "gareeb rath" in user_input.lower():
+                booking_type = "train"
+            elif "flight" in tool_name or "flight" in user_input.lower() or "flight" in str(args).lower():
+                booking_type = "flight"
+            elif "hotel" in tool_name or "hotel" in user_input.lower() or "hotel" in str(args).lower():
+                booking_type = "hotel"
 
     booking_details = dict(state.get("booking_details", {}))
     if args:
         booking_details.update(args)
 
-    # Selected booking details from user input (e.g. Shatabdi Express 12004)
+    # Selected booking details from user input
     selected_booking = dict(state.get("selected_booking", {}))
     if "shatabdi" in user_input.lower() or "12004" in user_input:
         selected_booking.update({
@@ -49,36 +68,50 @@ def booking_requirements_node(state: TripState) -> Dict[str, Any]:
             "departure_time": "14:00",
             "origin": entities.get("origin", "Lucknow"),
             "destination": entities.get("destination", "Kanpur"),
-            "date": entities.get("start_date", "2026-08-20"),
+            "date": entities.get("start_date"),
         })
         booking_details.update(selected_booking)
 
     # Accumulate passenger and guest info across turns
     existing_passengers: List[Dict[str, Any]] = list(state.get("passenger_info", []))
-    p0 = existing_passengers[0] if existing_passengers else {}
+    extracted_passengers = entities.get("passengers") or args.get("passengers")
 
-    new_name = entities.get("passenger_name") or args.get("passenger_name") or args.get("name") or p0.get("name")
-    new_age = entities.get("passenger_age") or args.get("passenger_age") or args.get("age") or p0.get("age")
-    new_gender = entities.get("passenger_gender") or args.get("passenger_gender") or args.get("gender") or p0.get("gender")
-    new_berth = entities.get("berth_preference") or args.get("berth_preference") or args.get("berth") or p0.get("berth_preference")
-    new_class = entities.get("travel_class") or args.get("travel_class") or args.get("class") or p0.get("class")
-    new_seat = entities.get("seat_preference") or args.get("seat_preference") or args.get("seat") or p0.get("seat_preference")
-    new_passport = entities.get("passport_or_id") or args.get("passport_or_id") or p0.get("passport_or_id")
+    if extracted_passengers and isinstance(extracted_passengers, list) and len(extracted_passengers) > 0:
+        passenger_info = []
+        for pax in extracted_passengers:
+            passenger_info.append({
+                "name": pax.get("name") or pax.get("passenger_name"),
+                "age": pax.get("age") or pax.get("passenger_age"),
+                "gender": pax.get("gender") or pax.get("passenger_gender"),
+                "berth_preference": pax.get("berth_preference") or pax.get("berth"),
+                "class": pax.get("class") or pax.get("travel_class") or entities.get("travel_class"),
+                "seat_preference": pax.get("seat_preference") or pax.get("seat"),
+                "passport_or_id": pax.get("passport_or_id"),
+            })
+    else:
+        p0 = existing_passengers[0] if existing_passengers else {}
+        new_name = entities.get("passenger_name") or args.get("passenger_name") or args.get("name") or p0.get("name")
+        new_age = entities.get("passenger_age") or args.get("passenger_age") or args.get("age") or p0.get("age")
+        new_gender = entities.get("passenger_gender") or args.get("passenger_gender") or args.get("gender") or p0.get("gender")
+        new_berth = entities.get("berth_preference") or args.get("berth_preference") or args.get("berth") or p0.get("berth_preference")
+        new_class = entities.get("travel_class") or args.get("travel_class") or args.get("class") or p0.get("class")
+        new_seat = entities.get("seat_preference") or args.get("seat_preference") or args.get("seat") or p0.get("seat_preference")
+        new_passport = entities.get("passport_or_id") or args.get("passport_or_id") or p0.get("passport_or_id")
 
-    updated_passenger = {
-        "name": new_name,
-        "age": new_age,
-        "gender": new_gender,
-        "berth_preference": new_berth,
-        "class": new_class,
-        "seat_preference": new_seat,
-        "passport_or_id": new_passport,
-    }
-    passenger_info = [updated_passenger]
+        updated_passenger = {
+            "name": new_name,
+            "age": new_age,
+            "gender": new_gender,
+            "berth_preference": new_berth,
+            "class": new_class,
+            "seat_preference": new_seat,
+            "passport_or_id": new_passport,
+        }
+        passenger_info = [updated_passenger]
 
     existing_guest = dict(state.get("guest_info", {}))
     existing_guest.update({
-        "name": entities.get("guest_name") or args.get("guest_name") or existing_guest.get("name"),
+        "name": entities.get("guest_name") or args.get("guest_name") or (passenger_info[0].get("name") if passenger_info else None) or existing_guest.get("name"),
         "contact_email_or_phone": entities.get("contact") or args.get("contact") or existing_guest.get("contact_email_or_phone"),
         "checkin_date": entities.get("start_date") or args.get("checkin") or existing_guest.get("checkin_date"),
         "checkout_date": entities.get("end_date") or args.get("checkout") or existing_guest.get("checkout_date"),
@@ -101,7 +134,10 @@ def booking_requirements_node(state: TripState) -> Dict[str, Any]:
     if req_complete:
         cap_result = check_booking_capability(booking_type)
         cap_available = cap_result["available"]
-        cap_reason = cap_result.get("reason", "")
+        if not cap_available:
+            cap_reason = "I am currently unable to complete the booking right now. Would you like to try again or explore other options?"
+        else:
+            cap_reason = cap_result.get("reason", "")
     else:
         # Information is incomplete -> DO NOT check capability yet! Keep cap_available=True for prompt routing
         cap_available = True
@@ -116,6 +152,8 @@ def booking_requirements_node(state: TripState) -> Dict[str, Any]:
 
     return {
         "booking_flow_active": True,
+        "booking_queue": booking_queue,
+        "current_booking_index": current_index,
         "selected_booking": selected_booking,
         "booking_type": booking_type,
         "booking_details": booking_details,
